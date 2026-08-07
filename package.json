@@ -1,0 +1,28 @@
+{
+  "name": "tank-duel-2d",
+  "version": "1.0.0",
+  "description": "本地双人回合制 2D 坦克炮战游戏（原创美术风格，离线 PWA）",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "train:ai": "node scripts/train-offline-ai.mjs",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "keywords": [
+    "tank",
+    "artillery",
+    "turn-based",
+    "canvas",
+    "typescript",
+    "pwa"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "typescript": "^5.4.5",
+    "vite": "^5.2.0",
+    "vitest": "^1.6.0"
+  }
+}
