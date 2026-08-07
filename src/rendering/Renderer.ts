@@ -3,13 +3,19 @@ import type { TerrainSystem } from '../systems/TerrainSystem';
 import type { ParticleSystem } from '../systems/ParticleSystem';
 import type { TurnManager } from '../systems/TurnManager';
 import type { ProjectileSystem } from '../systems/ProjectileSystem';
-import type { Tank, Particle } from '../types';
+import type { Tank, Particle, TreasureChest, TreasureReward } from '../types';
 import { BackgroundRenderer } from './BackgroundRenderer';
 import { TerrainRenderer } from './TerrainRenderer';
 import { TANK_CONFIG } from '../config/gameConfig';
 import { angleToVector, degToRad } from '../utils/math';
 import { COLORS, PLAYER_COLORS } from '../core/Constants';
 import { weaponRegistry } from '../weapons/WeaponRegistry';
+
+const TREASURE_REWARD_LABELS: Record<TreasureReward, { text: string; color: string }> = {
+  double_damage: { text: 'DMG×2', color: '#ff647c' },
+  wide_blast: { text: 'AOE+', color: '#4ddcff' },
+  split_shot: { text: 'SPLIT', color: '#dc78ff' },
+};
 
 export class Renderer {
   background: BackgroundRenderer;
@@ -55,6 +61,9 @@ export class Renderer {
     // 地形
     this.terrainRenderer.render(ctx, terrain, camera);
 
+    const wormholes = projectiles.getWormholes();
+    if (wormholes) this.renderWormholes(ctx, wormholes);
+
     // 坦克
     for (const tank of tanks) {
       this.renderTank(ctx, tank, turn);
@@ -75,7 +84,7 @@ export class Renderer {
 
     // 炮弹
     const chest = projectiles.getChest();
-    if (chest?.active) this.renderTreasureChest(ctx, chest);
+    if (chest?.active) this.renderBuffPickup(ctx, chest);
     for (const p of projectiles.getProjectiles()) {
       this.renderProjectile(ctx, p);
     }
@@ -119,25 +128,82 @@ export class Renderer {
     ctx.restore();
   }
 
-  private renderTreasureChest(
+  private renderBuffPickup(
     ctx: CanvasRenderingContext2D,
-    chest: import('../types').TreasureChest
+    chest: TreasureChest
   ): void {
     const y = chest.y + Math.sin(chest.phase) * 8;
+    const reward = chest.reward
+      ? TREASURE_REWARD_LABELS[chest.reward]
+      : { text: 'BUFF', color: '#8de8ff' };
+    const pulse = 1 + Math.sin(chest.phase * 1.5) * 0.06;
+
     ctx.save();
     ctx.translate(chest.x, y);
-    ctx.shadowColor = 'rgba(255, 209, 102, 0.9)';
-    ctx.shadowBlur = 14;
-    ctx.fillStyle = '#9b5b24';
-    ctx.fillRect(-15, -10, 30, 22);
-    ctx.fillStyle = '#d9902f';
-    ctx.fillRect(-15, -10, 30, 7);
-    ctx.fillStyle = '#ffd166';
-    ctx.fillRect(-3, -4, 6, 9);
-    ctx.strokeStyle = '#ffe7a3';
-    ctx.lineWidth = 2;
-    ctx.strokeRect(-15, -10, 30, 22);
+    ctx.scale(pulse, pulse);
+
+    // 低调的呼吸光晕与深色扁平化底盘。
+    ctx.shadowColor = reward.color;
+    ctx.shadowBlur = 9;
+    ctx.fillStyle = 'rgba(7, 19, 40, 0.88)';
+    ctx.beginPath();
+    ctx.arc(0, 0, 21, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = 'rgba(180, 225, 255, 0.24)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(0, 0, 16.5, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // 两段旋转圆弧作为科幻 HUD 识别边框。
+    ctx.save();
+    ctx.rotate(chest.phase * 0.45);
+    ctx.strokeStyle = reward.color;
+    ctx.lineWidth = 2.5;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.arc(0, 0, 22.5, -0.15, 1.7);
+    ctx.moveTo(-22.3, -3.2);
+    ctx.arc(0, 0, 22.5, Math.PI - 0.15, Math.PI + 1.7);
+    ctx.stroke();
     ctx.restore();
+
+    ctx.fillStyle = reward.color;
+    ctx.font = `800 ${reward.text.length > 4 ? 9 : 10}px system-ui, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(reward.text, 0, 0.5);
+    ctx.restore();
+  }
+
+  private renderWormholes(ctx: CanvasRenderingContext2D, pair: import('../types').WormholePair): void {
+    for (const portal of [pair.blue, pair.red]) {
+      ctx.save();
+      ctx.translate(portal.x, portal.y);
+      ctx.rotate(pair.phase * (portal.id === 'blue' ? 1 : -1));
+      const glow = ctx.createRadialGradient(0, 0, 3, 0, 0, portal.radius * 1.8);
+      glow.addColorStop(0, 'rgba(0,0,0,0.98)');
+      glow.addColorStop(0.42, 'rgba(0,0,0,0.94)');
+      glow.addColorStop(0.62, portal.color);
+      glow.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = glow;
+      ctx.shadowColor = portal.color;
+      ctx.shadowBlur = 20;
+      ctx.beginPath();
+      ctx.arc(0, 0, portal.radius * 1.8, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.shadowBlur = 8;
+      ctx.strokeStyle = portal.color;
+      ctx.globalAlpha = 0.75;
+      ctx.lineWidth = 2.2;
+      for (let ring = 0; ring < 3; ring++) {
+        ctx.beginPath();
+        ctx.ellipse(0, 0, portal.radius + ring * 5, portal.radius * (0.6 + ring * 0.12), ring * 0.7, 0.35, Math.PI * 1.75);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
   }
 
   private renderTank(ctx: CanvasRenderingContext2D, tank: Tank, turn: TurnManager): void {

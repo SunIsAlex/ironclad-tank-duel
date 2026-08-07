@@ -17,6 +17,7 @@ import { planAIShot, type AIShotPlan } from '../systems/AIController';
 import { ShopPanel } from '../ui/ShopPanel';
 import {
   awardRoundCredits,
+  chooseAICombatWeapon,
   chooseAIShopItem,
   createBasicLoadout,
   purchaseWeapon,
@@ -64,6 +65,7 @@ export class BattleScene implements Scene {
   private aiPlan: AIShotPlan | null = null;
   private landscapeHint: HTMLElement | null = null;
   private chestRound = 0;
+  private wormholeRound = 0;
   private matchWins: [number, number] = [0, 0];
   private gameNumber = 1;
   private gamesPlayed = 0;
@@ -211,6 +213,11 @@ export class BattleScene implements Scene {
           this.projectileSystem.spawnRandomChest();
           this.chestRound = this.turn.roundCount;
         }
+        if (this.wormholeRound !== this.turn.roundCount) {
+          const appeared = this.projectileSystem.spawnWormholesForTurn(0.3);
+          this.wormholeRound = this.turn.roundCount;
+          if (appeared) this.turnHint = { text: '空间异常：双向黑洞出现！', life: 1.8 };
+        }
         // 提示
         if (!this.turnHint) {
           const t = this.tanks[this.turn.currentPlayer];
@@ -226,6 +233,11 @@ export class BattleScene implements Scene {
       case 'PROJECTILE_FLYING':
         this.handleClusterDetonation();
         this.projectileSystem.update(dt);
+        for (const event of this.projectileSystem.consumeWormholeEvents()) {
+          this.game.particles.spawnExplosion(event.entryX, event.entryY, 24, event.color);
+          this.game.particles.spawnExplosion(event.exitX, event.exitY, 30, event.color);
+          this.game.camera.shake(5, 0.18);
+        }
         this.consumeTreasureRewards();
         this.consumeExplosions();
         if (!this.projectileSystem.hasAlive() && this.pendingExplosions.length === 0) {
@@ -404,23 +416,23 @@ export class BattleScene implements Scene {
       this.aiPlayer = this.turn.currentPlayer;
       // 留出观察地形和风向的时间，避免 AI 像脚本一样瞬间完成操作。
       this.aiThinkTimer = 1.1 + Math.random() * 0.9;
-      const availableWeapons = weaponRegistry.all().filter((weapon) =>
-        weapon.id !== 'basic_shell' && hasAmmo(tank, weapon.id)
-      );
-      tank.selectedWeaponId = availableWeapons.length > 0
-        ? availableWeapons.reduce((best, weapon) =>
-          weapon.maxDamage * weapon.projectileCount > best.maxDamage * best.projectileCount ? weapon : best
-        ).id
-        : 'basic_shell';
+      tank.selectedWeaponId = chooseAICombatWeapon(tank.ammo, {
+        distance: Math.abs(target.x - tank.x),
+        windStrength: this.wind.value,
+        difficulty: this.game.settings.aiDifficulty,
+      });
       this.aiPlan = planAIShot(
         tank,
         target,
         this.wind,
         this.game.terrain,
         Math.random,
-        tank.selectedWeaponId
+        tank.selectedWeaponId,
+        this.game.settings.aiDifficulty,
+        this.projectileSystem.getWormholes()
       );
-      this.turnHint = { text: `${tank.name}（离线 AI）正在判断…`, life: 2.5 };
+      const difficultyName = this.game.settings.aiDifficulty === 'elite' ? '精英 AI' : '普通 AI';
+      this.turnHint = { text: `${tank.name}（${difficultyName}）正在判断…`, life: 2.5 };
       this.game.mobile.clearAll();
       this.firePressed = false;
       this.weaponCyclePressed = false;
@@ -692,6 +704,7 @@ export class BattleScene implements Scene {
     this.game.particles.reset();
     this.pendingExplosions = [];
     this.chestRound = 0;
+    this.wormholeRound = 0;
     this.aiPlayer = -1;
     this.aiPlan = null;
     this.firePressed = false;
@@ -729,7 +742,11 @@ export class BattleScene implements Scene {
     this.shopPanel?.destroy();
     this.shopPanel = null;
     if (this.shopPlayer === 1 && this.game.settings.opponentMode === 'ai') {
-      const weaponId = chooseAIShopItem(this.credits[1], this.inventories[1]);
+      const weaponId = chooseAIShopItem(this.credits[1], this.inventories[1], {
+        distance: Math.abs(this.tanks[1].x - this.tanks[0].x),
+        windStrength: this.wind.value,
+        difficulty: this.game.settings.aiDifficulty,
+      });
       if (weaponId) this.buyShopWeapon(1, weaponId);
       this.finishShopPlayer();
       return;
@@ -835,7 +852,7 @@ export class BattleScene implements Scene {
         return '回合开始';
       case 'PLAYER_CONTROL':
         return this.isAITurn()
-          ? '离线 AI 小模型正在判断并瞄准…'
+          ? `${this.game.settings.aiDifficulty === 'elite' ? '精英' : '普通'} AI 小模型正在判断并瞄准…`
           : '←/→ 移动  鼠标拖动瞄准  滚轮调力度  空格发射  Tab 切换武器';
       case 'PROJECTILE_FLYING':
         return this.projectileSystem.hasControllableCluster(this.tanks[this.turn.currentPlayer]?.id ?? '')
@@ -881,7 +898,7 @@ export class BattleScene implements Scene {
       ctx.textAlign = 'left';
       ctx.textBaseline = 'top';
       const role = tank.playerIndex === 1 && this.game.settings.opponentMode === 'ai'
-        ? 'AI'
+        ? (this.game.settings.aiDifficulty === 'elite' ? '精英AI' : '普通AI')
         : `P${tank.playerIndex + 1}`;
       ctx.fillText(`${tank.name}  ${role}  ◆${this.credits[tank.playerIndex]}${tank.isAlive ? '' : ' †'}`, x + 16, y + 6);
       // 血条

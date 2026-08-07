@@ -44,6 +44,12 @@ export class SettingsPanel {
               <option value="human" ${s.opponentMode === 'human' ? 'selected' : ''}>本地玩家</option>
             </select>
           </label>
+          <label>AI 强度
+            <select id="set-ai-difficulty">
+              <option value="normal" ${s.aiDifficulty === 'normal' ? 'selected' : ''}>普通 AI · 人类化误差</option>
+              <option value="elite" ${s.aiDifficulty === 'elite' ? 'selected' : ''}>精英 AI · 多武器模型</option>
+            </select>
+          </label>
           <label>地图种子<input type="text" id="set-seed" value="${escapeAttr(s.mapSeed)}" placeholder="留空随机" /></label>
           <label>地图布局
             <select id="set-map">
@@ -91,6 +97,7 @@ export class SettingsPanel {
       const p1El = root.querySelector<HTMLInputElement>('#set-p1');
       const p2El = root.querySelector<HTMLInputElement>('#set-p2');
       const opponentEl = root.querySelector<HTMLSelectElement>('#set-opponent');
+      const aiDifficultyEl = root.querySelector<HTMLSelectElement>('#set-ai-difficulty');
       const seedEl = root.querySelector<HTMLInputElement>('#set-seed');
       const mapEl = root.querySelector<HTMLSelectElement>('#set-map');
       const turnEl = root.querySelector<HTMLSelectElement>('#set-turn');
@@ -102,7 +109,7 @@ export class SettingsPanel {
       const reducedEl = root.querySelector<HTMLInputElement>('#set-reduced');
       const musicEl = root.querySelector<HTMLInputElement>('#set-music');
       const sfxEl = root.querySelector<HTMLInputElement>('#set-sfx');
-      if (!p1El || !p2El || !opponentEl || !seedEl || !mapEl || !turnEl || !hpEl || !windEl || !fuelEl || !shakeEl || !trajEl || !reducedEl || !musicEl || !sfxEl) {
+      if (!p1El || !p2El || !opponentEl || !aiDifficultyEl || !seedEl || !mapEl || !turnEl || !hpEl || !windEl || !fuelEl || !shakeEl || !trajEl || !reducedEl || !musicEl || !sfxEl) {
         return; // DOM 尚未就绪
       }
       let seed = seedEl.value.trim();
@@ -117,6 +124,7 @@ export class SettingsPanel {
         player1Name: p1El.value || DEFAULT_SETTINGS.player1Name,
         player2Name: p2El.value || DEFAULT_SETTINGS.player2Name,
         opponentMode: opponentEl.value === 'human' ? 'human' : 'ai',
+        aiDifficulty: aiDifficultyEl.value === 'elite' ? 'elite' : 'normal',
         mapSeed: seed,
         mapPreset: mapEl.value,
         turnTime,

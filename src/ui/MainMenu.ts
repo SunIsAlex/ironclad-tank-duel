@@ -19,7 +19,7 @@ export class MainMenu {
     this.root.innerHTML = `
       <div class="mm-inner">
         <h1 class="mm-title">铁甲对决</h1>
-        <p class="mm-subtitle" id="mm-subtitle">${settings.opponentMode === 'ai' ? '单人对战智能 AI' : '本地双人回合制坦克炮战'}</p>
+        <p class="mm-subtitle" id="mm-subtitle">${settings.opponentMode === 'ai' ? `单人挑战${settings.aiDifficulty === 'elite' ? '精英' : '普通'} AI` : '本地双人回合制坦克炮战'}</p>
         <div class="mm-players">
           <div class="mm-card p1">
             <div class="mm-tag">P1</div>
@@ -55,9 +55,11 @@ export class MainMenu {
     const hint = this.root.querySelector<HTMLElement>('#mm-hint');
     const ai = settings.opponentMode === 'ai';
     if (tag) tag.textContent = ai ? 'AI' : 'P2';
-    if (subtitle) subtitle.textContent = ai ? '单人对战智能 AI' : '本地双人回合制坦克炮战';
+    if (subtitle) subtitle.textContent = ai ? `单人挑战${settings.aiDifficulty === 'elite' ? '精英' : '普通'} AI` : '本地双人回合制坦克炮战';
     if (play) play.textContent = ai ? '开始人机对战' : '开始本地双人游戏';
-    if (hint) hint.textContent = ai ? '你是 P1，AI 将自动操作 P2' : '两人共用同一套按键 / 触控按钮轮流操作';
+    if (hint) hint.textContent = ai
+      ? `你是 P1，${settings.aiDifficulty === 'elite' ? '精英 AI 会按武器与风向独立判断弹道' : '普通 AI 保留较明显的人类化误差'}`
+      : '两人共用同一套按键 / 触控按钮轮流操作';
   }
 
   private bind(): void {

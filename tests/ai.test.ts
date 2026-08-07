@@ -6,6 +6,13 @@ import {
   offlineAIModel,
   predictOfflineShot,
 } from '../src/systems/OfflineAIModel';
+import {
+  eliteAIModel,
+  isEliteAIModelValid,
+  predictEliteShot,
+} from '../src/systems/EliteAIModel';
+import { getWeaponById } from '../src/config/weaponConfig';
+import { isPortalAIModelValid, portalAIModel, predictPortalShot } from '../src/systems/PortalAIModel';
 
 const flatTerrain = {
   worldWidth: 1600,
@@ -33,6 +40,44 @@ describe('AI 弹道规划', () => {
     expect(near!.power).toBeGreaterThanOrEqual(150);
     expect(far!.power).toBeLessThanOrEqual(820);
     expect(Math.abs(far!.power - near!.power)).toBeGreaterThan(50);
+  });
+
+  it('精英模型由全部武器弹道样本训练且参数规模保持轻量', () => {
+    expect(isEliteAIModelValid()).toBe(true);
+    expect(eliteAIModel.trainedWeaponProfiles).toBe(11);
+    expect(eliteAIModel.trainedSamples).toBe(3200);
+    const parameterCount = eliteAIModel.w1.length + eliteAIModel.b1.length +
+      eliteAIModel.w2.length + eliteAIModel.b2.length;
+    expect(parameterCount).toBeLessThan(400);
+  });
+
+  it('精英模型会根据不同武器和风向给出不同力度', () => {
+    const heavy = predictEliteShot(760, 20, -2, getWeaponById('heavy_impact'))!;
+    const needle = predictEliteShot(760, 20, -2, getWeaponById('aurora_needle'))!;
+    const tailwind = predictEliteShot(760, 20, 2, getWeaponById('heavy_impact'))!;
+    expect(Math.abs(heavy.power - needle.power)).toBeGreaterThan(80);
+    expect(Math.abs(heavy.power - tailwind.power)).toBeGreaterThan(10);
+  });
+
+  it('普通与精英难度保持独立的瞄准误差范围', () => {
+    const shooter = createTank('ai', 1, 'AI', 1200, 500, 100, 220, 'heavy_impact');
+    const target = createTank('human', 0, '玩家', 400, 500, 100, 220, 'basic_shell');
+    const normal = planAIShot(shooter, target, { value: 2, displayStrength: 2 }, flatTerrain, () => 1, 'heavy_impact', 'normal');
+    const elite = planAIShot(shooter, target, { value: 2, displayStrength: 2 }, flatTerrain, () => 1, 'heavy_impact', 'elite');
+    expect(normal.angle).not.toBe(elite.angle);
+    expect(normal.missDistance).not.toBe(elite.missDistance);
+  });
+
+  it('黑洞射击模型包含入口、出口、风向与武器训练样本', () => {
+    expect(isPortalAIModelValid()).toBe(true);
+    expect(portalAIModel.trainedSamples).toBe(1400);
+    expect(portalAIModel.weaponProfiles).toBeGreaterThanOrEqual(7);
+    const prediction = predictPortalShot(
+      760, 0, -1.5, 330, 180, 950, 160, getWeaponById('aurora_needle')
+    );
+    expect(prediction).not.toBeNull();
+    expect(prediction!.elevation).toBeGreaterThanOrEqual(18);
+    expect(prediction!.power).toBeLessThanOrEqual(820);
   });
 
   it('能在无风平地上找到接近目标的射击方案', () => {

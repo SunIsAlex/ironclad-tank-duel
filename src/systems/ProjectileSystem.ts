@@ -1,4 +1,4 @@
-import type { Projectile, Tank, TreasureChest, TreasureReward, WindState } from '../types';
+import type { Projectile, Tank, TreasureChest, TreasureReward, WindState, WormholePair } from '../types';
 import { createProjectile, spawnTrail, updateTrail } from '../entities/Projectile';
 import { WORLD_CONFIG } from '../config/gameConfig';
 import { angleToVector } from '../utils/math';
@@ -23,12 +23,22 @@ export interface TreasureRewardEvent {
   reward: TreasureReward;
 }
 
+export interface WormholeTravelEvent {
+  entryX: number;
+  entryY: number;
+  exitX: number;
+  exitY: number;
+  color: string;
+}
+
 export class ProjectileSystem {
   private next: Projectile[] = [];
   private explosionsQueue: ExplosionRequest[] = [];
   private spawnsQueue: Projectile[] = [];
   private chest: TreasureChest | null = null;
   private rewardsQueue: TreasureRewardEvent[] = [];
+  private wormholes: WormholePair | null = null;
+  private wormholeEvents: WormholeTravelEvent[] = [];
 
   constructor(
     private terrain: TerrainSystem,
@@ -43,6 +53,8 @@ export class ProjectileSystem {
     this.spawnsQueue = [];
     this.chest = null;
     this.rewardsQueue = [];
+    this.wormholes = null;
+    this.wormholeEvents = [];
     (this.tanks as Tank[]) = tanks;
     (this.wind as WindState) = wind;
   }
@@ -94,6 +106,42 @@ export class ProjectileSystem {
 
   getChest(): TreasureChest | null {
     return this.chest;
+  }
+
+  getWormholes(): WormholePair | null {
+    return this.wormholes;
+  }
+
+  consumeWormholeEvents(): WormholeTravelEvent[] {
+    const events = this.wormholeEvents;
+    this.wormholeEvents = [];
+    return events;
+  }
+
+  spawnWormholesForTurn(chance = 0.3, random: () => number = Math.random): boolean {
+    this.wormholes = null;
+    if (random() >= chance) return false;
+    const endpoints: Array<{ x: number; y: number }> = [];
+    for (let portalIndex = 0; portalIndex < 2; portalIndex++) {
+      for (let attempt = 0; attempt < 40; attempt++) {
+        const x = 140 + random() * (this.terrain.worldWidth - 280);
+        const surfaceY = this.terrain.surfaceY(x);
+        const y = Math.max(105, surfaceY - 80 - random() * 210);
+        const awayFromTanks = this.tanks.every((tank) => Math.hypot(x - tank.x, y - tank.y) > 120);
+        const awayFromOther = endpoints.every((point) => Math.hypot(x - point.x, y - point.y) > 320);
+        if (awayFromTanks && awayFromOther) {
+          endpoints.push({ x, y });
+          break;
+        }
+      }
+    }
+    if (endpoints.length < 2) return false;
+    this.wormholes = {
+      blue: { id: 'blue', ...endpoints[0], radius: 25, color: '#45b7ff' },
+      red: { id: 'red', ...endpoints[1], radius: 25, color: '#ff536d' },
+      phase: random() * Math.PI * 2,
+    };
+    return true;
   }
 
   consumeRewards(): TreasureRewardEvent[] {
@@ -167,7 +215,8 @@ export class ProjectileSystem {
       radius: 18,
       phase: Math.random() * Math.PI * 2,
       active: true,
-      reward: null,
+      // 生成时即确定奖励，便于渲染器在宝箱上方预告 buff。
+      reward: this.randomReward(),
     };
   }
 
@@ -264,6 +313,8 @@ export class ProjectileSystem {
     this.spawnsQueue = [];
     this.chest = null;
     this.rewardsQueue = [];
+    this.wormholes = null;
+    this.wormholeEvents = [];
   }
 
   // 更新所有炮弹：移动、碰撞、行为触发
@@ -271,6 +322,7 @@ export class ProjectileSystem {
     const g = WORLD_CONFIG.gravity;
     const wind = this.wind.value * WORLD_CONFIG.windScale;
     if (this.chest?.active) this.chest.phase += dt * 2.4;
+    if (this.wormholes) this.wormholes.phase += dt * 2.8;
 
     // 处理分裂等产生的新炮弹
     this.consumePendingSpawns();
@@ -278,6 +330,7 @@ export class ProjectileSystem {
     const survivors: Projectile[] = [];
     for (const p of this.next) {
       if (!p.alive) continue;
+      p.portalCooldown = Math.max(0, p.portalCooldown - dt);
       p.prevX = p.x;
       p.prevY = p.y;
       if (p.state === 'rolling') {
@@ -317,6 +370,11 @@ export class ProjectileSystem {
       p.y += p.vy * dt;
       p.age += dt;
       this.updateTracer(p, dt);
+
+      if (this.teleportThroughWormhole(p)) {
+        survivors.push(p);
+        continue;
+      }
 
       // 行为更新
       if (p.splitTime > 0 && !p.splitDone && p.age >= p.splitTime) {
@@ -375,6 +433,41 @@ export class ProjectileSystem {
       this.spawnsQueue.length = 0;
     }
     this.next = survivors;
+  }
+
+  private teleportThroughWormhole(p: Projectile): boolean {
+    const pair = this.wormholes;
+    if (!pair || p.portalCooldown > 0 || p.state !== 'flying') return false;
+    const routes = [
+      { entry: pair.blue, exit: pair.red },
+      { entry: pair.red, exit: pair.blue },
+    ];
+    for (const route of routes) {
+      const hit = segmentCircleHit(
+        p.prevX, p.prevY, p.x, p.y,
+        route.entry.x, route.entry.y, route.entry.radius + p.radius
+      );
+      if (!hit) continue;
+      const speed = Math.hypot(p.vx, p.vy) || 1;
+      p.vx = -p.vx;
+      p.vy = -p.vy;
+      const padding = route.exit.radius + p.radius + 7;
+      p.x = route.exit.x + (p.vx / speed) * padding;
+      p.y = route.exit.y + (p.vy / speed) * padding;
+      p.prevX = p.x;
+      p.prevY = p.y;
+      p.portalCooldown = 0.28;
+      p.trail = [];
+      this.wormholeEvents.push({
+        entryX: hit.x,
+        entryY: hit.y,
+        exitX: route.exit.x,
+        exitY: route.exit.y,
+        color: route.exit.color,
+      });
+      return true;
+    }
+    return false;
   }
 
   private updateTracer(p: Projectile, dt: number, samplesPerSecond = 30): void {
@@ -467,10 +560,11 @@ export class ProjectileSystem {
     const chest = this.chest;
     if (!chest?.active) return;
     chest.active = false;
-    chest.reward = this.randomReward();
-    this.rewardsQueue.push({ ownerTankId: p.ownerId, reward: chest.reward });
+    const reward = chest.reward ?? this.randomReward();
+    chest.reward = reward;
+    this.rewardsQueue.push({ ownerTankId: p.ownerId, reward });
 
-    switch (chest.reward) {
+    switch (reward) {
       case 'double_damage':
         p.damage *= 2;
         break;

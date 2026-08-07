@@ -62,8 +62,23 @@ export interface Projectile {
   maxBounce: number;
   // 标记是否为主弹（用于镜头跟随和分裂母弹）
   isPrimary: boolean;
+  portalCooldown: number;
   // 留下尾迹用
   trail: Array<{ x: number; y: number; life: number; maxLife: number }>;
+}
+
+export interface WormholeEndpoint {
+  id: 'blue' | 'red';
+  x: number;
+  y: number;
+  radius: number;
+  color: string;
+}
+
+export interface WormholePair {
+  blue: WormholeEndpoint;
+  red: WormholeEndpoint;
+  phase: number;
 }
 
 export type TreasureReward = 'double_damage' | 'wide_blast' | 'split_shot';
@@ -147,6 +162,7 @@ export interface GameSettings {
   player1Name: string;
   player2Name: string;
   opponentMode: 'human' | 'ai';
+  aiDifficulty: 'normal' | 'elite';
   mapSeed: string;
   mapPreset: string;
   turnTime: number; // 0 表示无限

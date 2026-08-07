@@ -203,6 +203,7 @@ describe('空中分裂武器', () => {
       expect(chest.x).toBeLessThanOrEqual(1130);
       expect(chest.x).toBeGreaterThan(80);
       expect(chest.x).toBeLessThan(1520);
+      expect(chest.reward).toBe('wide_blast');
     } finally {
       Math.random = oldRandom;
     }
@@ -238,6 +239,33 @@ describe('空中分裂武器', () => {
 });
 
 describe('新增弹体机制', () => {
+  it('炮弹进入蓝色黑洞后从红色黑洞反向平行射出', () => {
+    const terrain = { worldWidth: 2000, worldHeight: 1000, surfaceY: () => 500 };
+    const collision = { detectProjectileHit: () => null };
+    const tanks = [
+      { id: 't1', x: 100, y: 500, isAlive: true },
+      { id: 't2', x: 1500, y: 500, isAlive: true },
+    ];
+    const system = new ProjectileSystem(terrain as never, collision as never, tanks as never, { value: 0, displayStrength: 0 });
+    const rolls = [0, 0.25, 0.5, 0.75, 0.5, 0.5];
+    expect(system.spawnWormholesForTurn(1, () => rolls.shift() ?? 0.5)).toBe(true);
+    const pair = system.getWormholes()!;
+    const projectile = createProjectile('t1', getWeaponById('basic_shell'), pair.blue.x - 35, pair.blue.y, 200, 0, true);
+    system.getProjectiles().push(projectile);
+    system.update(0.2);
+    expect(projectile.x).toBeLessThan(pair.red.x);
+    expect(projectile.vx).toBeLessThan(0);
+    expect(projectile.portalCooldown).toBeGreaterThan(0);
+    expect(system.consumeWormholeEvents()).toHaveLength(1);
+  });
+
+  it('未抽中空间异常时不会生成黑洞', () => {
+    const terrain = { worldWidth: 1600, worldHeight: 720, surfaceY: () => 500 };
+    const system = new ProjectileSystem(terrain as never, {} as never, [] as never, { value: 0, displayStrength: 0 });
+    expect(system.spawnWormholesForTurn(0.3, () => 0.9)).toBe(false);
+    expect(system.getWormholes()).toBeNull();
+  });
+
   it('天穹坐标弹命中地面后生成 5 枚高空载荷', () => {
     const terrain = { worldWidth: 1600, worldHeight: 720 };
     const collision = {

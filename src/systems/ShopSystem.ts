@@ -1,4 +1,5 @@
 import { WEAPONS } from '../config/weaponConfig';
+import weaponPolicyData from '../models/weapon-policy.json';
 
 export const ROUND_CREDIT_INCOME = 700;
 export const WINNER_CREDIT_BONUS = 350;
@@ -26,6 +27,38 @@ export interface PurchaseResult {
   credits: number;
   ammo: Record<string, number>;
   reason?: 'unknown' | 'insufficient_credits' | 'ammo_full';
+}
+
+export interface AIWeaponContext {
+  distance: number;
+  windStrength: number;
+  difficulty: 'normal' | 'elite';
+}
+
+interface WeaponPolicyData {
+  version: number;
+  weaponProfiles: number;
+  contexts: string[];
+  simulations: number;
+  policies: Record<'normal' | 'elite', Record<string, Record<string, number>>>;
+}
+
+export const weaponPolicy = weaponPolicyData as WeaponPolicyData;
+
+export function isWeaponPolicyValid(policy: WeaponPolicyData = weaponPolicy): boolean {
+  return policy.version === 1 && policy.weaponProfiles === WEAPONS.length &&
+    policy.simulations > 100000 && policy.contexts.length === 6;
+}
+
+function contextKey(context: AIWeaponContext): string {
+  const range = context.distance < 500 ? 'near' : context.distance < 780 ? 'mid' : 'far';
+  const wind = Math.abs(context.windStrength) >= 1.5 ? 'windy' : 'calm';
+  return `${range}_${wind}`;
+}
+
+export function getWeaponWinRate(weaponId: string, context: AIWeaponContext): number {
+  if (!isWeaponPolicyValid()) return 0.5;
+  return weaponPolicy.policies[context.difficulty][contextKey(context)]?.[weaponId] ?? 0;
 }
 
 export function createBasicLoadout(): Record<string, number> {
@@ -60,20 +93,32 @@ export function purchaseWeapon(
   };
 }
 
-// AI 每局只购买一组：优先考虑高伤害装备，同时保留预算不足时的廉价选择。
-export function chooseAIShopItem(credits: number, ammo: Record<string, number>): string | null {
-  const preference = [
-    'heavy_impact',
-    'aurora_needle',
-    'micro_cluster',
-    'triple_scatter',
-    'drill_shot',
-    'bounce_shot',
-  ];
-  return preference.find((weaponId) => {
-    const item = SHOP_ITEMS.find((candidate) => candidate.weaponId === weaponId)!;
-    const weapon = WEAPONS.find((candidate) => candidate.id === weaponId)!;
-    return credits >= item.price && (ammo[weaponId] ?? 0) < weapon.ammo * 3;
-  }) ?? null;
+// 从自对战胜率中选择当前局势下收益最高的可购武器，而不是按价格排序。
+export function chooseAIShopItem(
+  credits: number,
+  ammo: Record<string, number>,
+  context: AIWeaponContext = { distance: 650, windStrength: 0, difficulty: 'normal' }
+): string | null {
+  const candidates = SHOP_ITEMS.filter((item) => {
+    const weapon = WEAPONS.find((candidate) => candidate.id === item.weaponId)!;
+    return credits >= item.price && (ammo[item.weaponId] ?? 0) < weapon.ammo * 3;
+  });
+  if (candidates.length === 0) return null;
+  return candidates.reduce((best, item) => {
+    const stockPenalty = (ammo[item.weaponId] ?? 0) > 0 ? 0.08 : 0;
+    const score = getWeaponWinRate(item.weaponId, context) - stockPenalty;
+    const bestPenalty = (ammo[best.weaponId] ?? 0) > 0 ? 0.08 : 0;
+    const bestScore = getWeaponWinRate(best.weaponId, context) - bestPenalty;
+    return score > bestScore ? item : best;
+  }).weaponId;
 }
 
+export function chooseAICombatWeapon(
+  ammo: Record<string, number>,
+  context: AIWeaponContext
+): string {
+  const available = WEAPONS.filter((weapon) => ammo[weapon.id] === -1 || (ammo[weapon.id] ?? 0) > 0);
+  return available.reduce((best, weapon) =>
+    getWeaponWinRate(weapon.id, context) > getWeaponWinRate(best.id, context) ? weapon : best
+  ).id;
+}

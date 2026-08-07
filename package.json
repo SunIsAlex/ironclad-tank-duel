@@ -7,6 +7,9 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "train:ai": "node scripts/train-offline-ai.mjs",
+    "train:ai:elite": "node scripts/train-elite-ai.mjs",
+    "train:ai:weapons": "node scripts/train-weapon-policy.mjs",
+    "train:ai:portals": "node scripts/train-portal-ai.mjs",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest"

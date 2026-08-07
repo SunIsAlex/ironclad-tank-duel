@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
   awardRoundCredits,
+  chooseAICombatWeapon,
   chooseAIShopItem,
   createBasicLoadout,
   purchaseWeapon,
   ROUND_CREDIT_INCOME,
   WINNER_CREDIT_BONUS,
+  isWeaponPolicyValid,
+  weaponPolicy,
 } from '../src/systems/ShopSystem';
 
 describe('局间武器商店', () => {
@@ -44,8 +47,25 @@ describe('局间武器商店', () => {
     expect(result.credits).toBe(5000);
   });
 
-  it('AI 会按预算选择可购买武器', () => {
-    expect(chooseAIShopItem(700, createBasicLoadout())).toBe('micro_cluster');
+  it('AI 武器策略来自普通与精英 AI 的大量模拟对战', () => {
+    expect(isWeaponPolicyValid()).toBe(true);
+    expect(weaponPolicy.weaponProfiles).toBe(11);
+    expect(weaponPolicy.simulations).toBeGreaterThan(200000);
+  });
+
+  it('AI 会按距离和风况选择武器，而不是默认购买最贵武器', () => {
+    const ammo = createBasicLoadout();
+    expect(chooseAIShopItem(700, ammo, { distance: 380, windStrength: 0, difficulty: 'normal' })).toBe('stone_runner');
+    expect(chooseAIShopItem(700, ammo, { distance: 650, windStrength: 0, difficulty: 'normal' })).toBe('drill_shot');
+    expect(chooseAIShopItem(1000, ammo, { distance: 900, windStrength: 2.5, difficulty: 'elite' })).toBe('aurora_needle');
     expect(chooseAIShopItem(400, createBasicLoadout())).toBeNull();
+  });
+
+  it('AI 开火时也从已有库存中选择条件胜率最高的武器', () => {
+    const ammo = createBasicLoadout();
+    ammo.heavy_impact = 3;
+    ammo.aurora_needle = 4;
+    expect(chooseAICombatWeapon(ammo, { distance: 380, windStrength: 0.5, difficulty: 'elite' })).toBe('heavy_impact');
+    expect(chooseAICombatWeapon(ammo, { distance: 900, windStrength: 2.5, difficulty: 'elite' })).toBe('aurora_needle');
   });
 });

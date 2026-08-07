@@ -4,6 +4,7 @@ export const DEFAULT_SETTINGS: GameSettings = {
   player1Name: '玩家 1',
   player2Name: '玩家 2',
   opponentMode: 'ai',
+  aiDifficulty: 'normal',
   mapSeed: '',
   mapPreset: 'open_arena',
   turnTime: 0,

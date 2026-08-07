@@ -45,6 +45,7 @@ export function createProjectile(
     isPayload: false,
     maxBounce: weapon.bounceCount ?? 0,
     isPrimary,
+    portalCooldown: 0,
     trail: [],
   };
 }
