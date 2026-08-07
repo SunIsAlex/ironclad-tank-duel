@@ -1,5 +1,5 @@
 // 全局常量
-import { WORLD_CONFIG } from '../config/gameConfig';
+import { GROUND_THICKNESS as TERRAIN_GROUND_THICKNESS, WORLD_CONFIG } from '../config/gameConfig';
 
 export const STORAGE_KEYS = {
   settings: 'tank-duel:settings',
@@ -25,4 +25,4 @@ export const PLAYER_LABELS = ['P1', 'P2'];
 
 export const WORLD_WIDTH = WORLD_CONFIG.worldWidth;
 export const WORLD_HEIGHT = WORLD_CONFIG.worldHeight;
-export const GROUND_THICKNESS = 240;
+export const GROUND_THICKNESS = TERRAIN_GROUND_THICKNESS;

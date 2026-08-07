@@ -136,6 +136,17 @@ export function planAIShot(
     }
   }
 
+  // 扩展地图上的远距离超出了旧模型的主要训练区间，用物理模拟做一次
+  // 粗粒度全局校正，避免 AI 在大型战场上持续打短。
+  if (distance > 1050) {
+    for (let angle = minAngle; angle <= maxAngle; angle += 6) {
+      for (let power = POWER_RANGE.min; power <= POWER_RANGE.max; power += 40) {
+        const nearest = evaluate(angle, power);
+        if (nearest < best.missDistance) best = { angle, power, missDistance: nearest };
+      }
+    }
+  }
+
   // 黑洞存在时对实际传送弹道进行候选搜索。普通 AI 使用较粗粒度，精英
   // AI 搜索更细；两者仍会叠加各自的风力感知和操作误差。
   if (wormholes) {
@@ -174,9 +185,10 @@ export function planAIShot(
     (aimConfig.maxPowerError - aimConfig.minPowerError) * distanceRatio;
   const angleError = (random() - 0.5) * 2 * angleErrorLimit;
   const powerError = (random() - 0.5) * 2 * powerErrorLimit;
+  const aiPowerMax = distance > 1050 ? POWER_RANGE.max : 820;
   return {
     angle: clamp(best.angle + angleError, minAngle, maxAngle),
-    power: clamp(best.power + powerError, POWER_RANGE.min, POWER_RANGE.max),
+    power: clamp(best.power + powerError, POWER_RANGE.min, aiPowerMax),
     missDistance: best.missDistance,
   };
 }

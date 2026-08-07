@@ -119,8 +119,8 @@ export class BattleScene implements Scene {
     this.turn.startGame();
 
     game.camera.x = this.tanks[0].x;
-    game.camera.y = this.tanks[0].y - 100;
-    game.camera.follow(this.tanks[0].x, this.tanks[0].y - 80);
+    game.camera.followTank(this.tanks[0].x, this.tanks[0].y);
+    game.camera.y = game.camera.targetY;
 
     this.projectileSystem = new ProjectileSystem(game.terrain, game.collision, this.tanks, this.wind);
     this.projectileSystem.setWind(this.wind);
@@ -141,10 +141,23 @@ export class BattleScene implements Scene {
   private placeTanks(): void {
     const terrain = this.game.terrain;
     const w = terrain.worldWidth;
-    // 出生点控制：P1 在 22%~30% 区间，P2 在 70%~78% 区间
-    // 在 worldWidth=1600 下：间距约 720px，最大功率 45° 射程约 940px，可命中
-    const x1 = Math.floor(w * 0.22 + Math.random() * w * 0.08);
-    const x2 = Math.floor(w * 0.70 + Math.random() * w * 0.08);
+    // 大地图上扩大出生区间；从多个候选点中挑选相对稳定的落脚处，避免
+    // 多样地形把坦克直接生成在尖峰侧面。
+    const findSpawn = (minRatio: number, maxRatio: number): number => {
+      let bestX = Math.floor(w * (minRatio + Math.random() * (maxRatio - minRatio)));
+      let bestSlope = Number.POSITIVE_INFINITY;
+      for (let i = 0; i < 24; i++) {
+        const x = Math.floor(w * (minRatio + Math.random() * (maxRatio - minRatio)));
+        const slope = Math.abs(terrain.surfaceY(x + 18) - terrain.surfaceY(x - 18)) / 36;
+        if (slope < bestSlope) {
+          bestX = x;
+          bestSlope = slope;
+        }
+      }
+      return bestX;
+    };
+    const x1 = findSpawn(0.15, 0.3);
+    const x2 = findSpawn(0.7, 0.85);
     this.tanks[0].x = x1;
     this.tanks[0].y = terrain.surfaceY(x1);
     this.tanks[1].x = x2;
@@ -315,7 +328,7 @@ export class BattleScene implements Scene {
       return;
     }
     // 镜头跟随当前坦克
-    this.game.camera.follow(tank.x, tank.y - 80);
+    this.game.camera.followTank(tank.x, tank.y);
 
     // 处理触控一次性动作
     const oneShots = this.game.mobile.consumeOneShots();
@@ -438,7 +451,7 @@ export class BattleScene implements Scene {
       this.weaponCyclePressed = false;
     }
 
-    this.game.camera.follow(tank.x, tank.y - 80);
+    this.game.camera.followTank(tank.x, tank.y);
     this.aiThinkTimer -= dt;
     const angleDiff = this.aiPlan.angle - tank.turretAngle;
     const angleStep = 42 * dt;
@@ -713,7 +726,7 @@ export class BattleScene implements Scene {
     this.roundEnding = false;
     this.matchComplete = false;
     const activeTank = this.tanks[this.turn.currentPlayer];
-    this.game.camera.follow(activeTank.x, activeTank.y - 80);
+    this.game.camera.followTank(activeTank.x, activeTank.y);
     this.turnHint = {
       text: `第 ${this.gameNumber}/${MATCH_MAX_GAMES} 局 · 比分 ${this.matchWins[0]}:${this.matchWins[1]}`,
       life: 2,

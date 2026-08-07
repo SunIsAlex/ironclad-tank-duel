@@ -14,6 +14,7 @@ interface EliteModelData {
 
 export interface EliteModelPrediction { elevation: number; power: number }
 export const eliteAIModel = modelData as EliteModelData;
+const TRAINED_POWER_MAX = 820;
 
 export function isEliteAIModelValid(model: EliteModelData = eliteAIModel): boolean {
   const { inputs, hidden, outputs } = model.architecture;
@@ -63,7 +64,6 @@ export function predictEliteShot(
   }
   return {
     elevation: clamp(18 + output[0] * 62, 18, 80),
-    power: clamp(POWER_RANGE.min + output[1] * (POWER_RANGE.max - POWER_RANGE.min), POWER_RANGE.min, POWER_RANGE.max),
+    power: clamp(POWER_RANGE.min + output[1] * (TRAINED_POWER_MAX - POWER_RANGE.min), POWER_RANGE.min, TRAINED_POWER_MAX),
   };
 }
-

@@ -6,7 +6,7 @@ export const DEFAULT_SETTINGS: GameSettings = {
   opponentMode: 'ai',
   aiDifficulty: 'normal',
   mapSeed: '',
-  mapPreset: 'open_arena',
+  mapPreset: 'generated',
   turnTime: 0,
   initialHealth: 100,
   windStrength: 2,
@@ -27,14 +27,14 @@ export interface GameWorldConfig {
 
 export const WORLD_CONFIG: GameWorldConfig = {
   // 内部世界像素尺寸（不随屏幕变化）
-  worldWidth: 1600,
-  worldHeight: 720,
+  worldWidth: 2400,
+  worldHeight: 900,
   gravity: 520,
   windScale: 55,
 };
 
 // 土壤层厚度（用于绘制渐变和判断地图底部）
-export const GROUND_THICKNESS = 240;
+export const GROUND_THICKNESS = 280;
 
 // 坦克外观参数
 export const TANK_CONFIG = {
@@ -53,8 +53,8 @@ export const TANK_CONFIG = {
 };
 
 // 武器解锁的默认颜色（便于 UI 显示）
-// 最大功率 820：在重力 520 下 45° 射程约 1290px，足以覆盖 1600 世界两端
-export const POWER_RANGE = { min: 150, max: 820 };
+// 最大功率 1100：无风、45° 时射程约 2327px，可覆盖扩展后的大型战场。
+export const POWER_RANGE = { min: 150, max: 1100 };
 export const ANGLE_RANGE = { min: 0, max: 180 };
 
 export const PROJECTILE_LIFETIME = 12; // 秒

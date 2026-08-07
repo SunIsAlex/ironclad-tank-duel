@@ -1,5 +1,8 @@
 import { clamp, smoothApproach } from '../utils/math';
 
+const TANK_SCREEN_Y_RATIO = 0.6;
+const TANK_SAFE_BOTTOM_RATIO = 0.76;
+
 export class CameraSystem {
   x = 0;
   y = 0;
@@ -16,6 +19,7 @@ export class CameraSystem {
   worldHeight: number;
   screenShakeEnabled = true;
   reducedMotion = false;
+  private tankFocus: { x: number; y: number } | null = null;
 
   constructor(worldWidth: number, worldHeight: number) {
     this.worldWidth = worldWidth;
@@ -25,14 +29,30 @@ export class CameraSystem {
   setViewport(w: number, h: number): void {
     this.viewportWidth = w;
     this.viewportHeight = h;
-    // 根据视口选择合适的缩放：尽可能完全显示世界高度
-    const z = h / this.worldHeight;
-    this.zoom = clamp(z, 0.4, 2.5);
+    // 同时受世界宽、高约束，确保扩大后的整张地图和双方坦克始终可见。
+    // 不能设置过高的最小缩放，否则窄屏会再次裁掉地图左右两端。
+    const fitWidth = w / this.worldWidth;
+    const fitHeight = h / this.worldHeight;
+    this.zoom = clamp(Math.min(fitWidth, fitHeight), 0.1, 2.5);
+    if (this.tankFocus) this.setTankTarget(this.tankFocus.x, this.tankFocus.y);
   }
 
   follow(x: number, y: number): void {
+    this.tankFocus = null;
     this.targetX = x;
     this.targetY = y;
+  }
+
+  /** 跟随坦克时让其位于画面中下部，并在平滑追赶期间保持在安全区内。 */
+  followTank(x: number, y: number): void {
+    this.tankFocus = { x, y };
+    this.setTankTarget(x, y);
+  }
+
+  private setTankTarget(x: number, y: number): void {
+    const visibleHeight = this.viewportHeight / this.zoom;
+    this.targetX = x;
+    this.targetY = y - (TANK_SCREEN_Y_RATIO - 0.5) * visibleHeight;
   }
 
   shake(magnitude: number, time: number): void {
@@ -72,6 +92,15 @@ export class CameraSystem {
     }
     if (this.viewportHeight / this.zoom >= this.worldHeight) {
       this.y = this.worldHeight / 2;
+    }
+
+    // 平滑镜头从高空炮弹切回地面时会产生明显滞后。只修正超出底部
+    // 安全线的部分，既保留平滑感，也不会让坦克掉出画面。
+    if (this.tankFocus && this.viewportHeight / this.zoom < this.worldHeight) {
+      const minCameraY = this.tankFocus.y
+        - (TANK_SAFE_BOTTOM_RATIO - 0.5) * this.viewportHeight / this.zoom;
+      this.y = Math.max(this.y, minCameraY);
+      this.y = Math.min(this.y, this.worldHeight - halfH);
     }
   }
 

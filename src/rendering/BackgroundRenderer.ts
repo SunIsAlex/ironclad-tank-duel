@@ -31,7 +31,7 @@ export class BackgroundRenderer {
     const rng = createRng(seed + '_bg');
 
     // 云
-    const cloudCount = 6;
+    const cloudCount = 9;
     for (let i = 0; i < cloudCount; i++) {
       this.clouds.push({
         x: rng.range(0, this.width),
@@ -58,7 +58,7 @@ export class BackgroundRenderer {
 
   private buildMountain(rng: RNG, amp: number, color: string, segments: number): Mountain {
     const points: number[] = [];
-    const baseY = this.height - 220;
+    const baseY = this.height - 270;
     for (let i = 0; i <= segments; i++) {
       points.push(rng.range(-amp, 0));
     }

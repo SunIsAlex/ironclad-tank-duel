@@ -1,7 +1,7 @@
 import { WORLD_CONFIG, GROUND_THICKNESS } from '../config/gameConfig';
 import type { RNG } from '../utils/random';
 import { createRng } from '../utils/random';
-import { getMapPreset } from '../config/mapConfig';
+import { getMapPreset, MAP_PRESETS, type TerrainShape } from '../config/mapConfig';
 
 // 地形系统：维护离屏 Canvas + 1D 高度图 + 低分辨率碰撞掩码
 // 弹坑通过 destination-out 擦除并同步更新高度图与掩码
@@ -42,36 +42,37 @@ export class TerrainSystem {
     this.mask = new Uint8Array(this.maskWidth * this.maskHeight);
   }
 
-  generate(seed: string, mapPreset = 'open_arena'): void {
+  generate(seed: string, mapPreset = 'generated'): void {
     void seed; // seed 已通过 createRng 使用
     const rng = createRng(seed);
-    const preset = getMapPreset(mapPreset);
+    const selectedPreset = getMapPreset(mapPreset);
+    const preset = selectedPreset.shape === 'generated'
+      ? rng.pick(MAP_PRESETS.filter((item) => item.shape !== 'generated' && item.shape !== 'training_range'))
+      : selectedPreset;
     const w = this.worldWidth;
     const h = this.worldHeight;
-    const baseY = h - 220;
+    const baseY = h - 270;
 
     const points = new Float32Array(w);
 
-    // 平缓地形：低频大幅 + 极弱高频细节
-    // 最大瞬时坡度 ≈ amp * freq，控制在 ≤ 0.5 以保证 maxClimbSlope(0.85) 可上坡
-    const amp1 = rng.range(34, 52) * preset.waveScale;
-    const amp2 = rng.range(12, 24) * preset.waveScale;
-    const amp3 = rng.range(4, 9) * preset.waveScale;
+    // 多尺度地貌：大轮廓决定战术结构，中高频变化负责制造落点与掩体差异。
+    const amp1 = rng.range(52, 82) * preset.waveScale;
+    const amp2 = rng.range(22, 42) * preset.waveScale;
+    const amp3 = rng.range(7, 16) * preset.roughness;
     const phase1 = rng.range(0, Math.PI * 2);
     const phase2 = rng.range(0, Math.PI * 2);
     const phase3 = rng.range(0, Math.PI * 2);
-    // 频率更小 -> 波长更长 -> 坡度更缓
-    const freq1 = rng.range(0.0025, 0.0045);
-    const freq2 = rng.range(0.006, 0.011);
-    const freq3 = rng.range(0.018, 0.028);
+    const freq1 = rng.range(0.0018, 0.0032);
+    const freq2 = rng.range(0.005, 0.009);
+    const freq3 = rng.range(0.014, 0.025);
 
     // 1D 平滑随机游走（少量大节点），幅度受限
-    const nodeList = Math.max(8, Math.floor(w / 260));
+    const nodeList = Math.max(10, Math.floor(w / 180));
     const nodeXs: number[] = [];
     const nodeYs: number[] = [];
     for (let i = 0; i <= nodeList; i++) {
       nodeXs.push((i / nodeList) * (w - 1));
-      nodeYs.push(rng.range(-22, 36));
+      nodeYs.push(rng.range(-52, 58) * preset.roughness);
     }
 
     function smoothNoise(x: number): number {
@@ -89,30 +90,19 @@ export class TerrainSystem {
 
     for (let x = 0; x < w; x++) {
       const u = x / Math.max(1, w - 1);
-      let macro = 0;
-      if (preset.id === 'twin_hills') {
-        macro = -54 * gaussian(u, 0.24, 0.13) - 54 * gaussian(u, 0.76, 0.13) + 18 * gaussian(u, 0.5, 0.2);
-      } else if (preset.id === 'central_plateau') {
-        macro = -64 * gaussian(u, 0.5, 0.18);
-      } else if (preset.id === 'lowland_basin') {
-        macro = 58 * gaussian(u, 0.5, 0.3);
-      } else if (preset.id === 'step_corridor') {
-        macro = -24 * Math.sin(u * Math.PI * 5) - 18 * Math.sin(u * Math.PI * 2.5);
-      } else if (preset.id === 'training_range') {
-        macro = 8 * Math.sin(u * Math.PI * 2);
-      }
+      const macro = terrainMacro(preset.shape as TerrainShape, u);
       const y =
         baseY +
         macro -
         Math.sin(x * freq1 + phase1) * amp1 -
         Math.sin(x * freq2 + phase2) * amp2 -
         Math.sin(x * freq3 + phase3) * amp3 -
-        smoothNoise(x) * 0.4;
-      points[x] = y;
+        smoothNoise(x) * 0.7;
+      points[x] = clampTerrainHeight(y, h);
     }
 
     // 限坡：对相邻列坡度做软裁剪，避免局部尖峰
-    const maxSlope = 0.75;
+    const maxSlope = preset.maxSlope;
     for (let x = 1; x < w; x++) {
       const dy = points[x] - points[x - 1];
       if (Math.abs(dy) > maxSlope) {
@@ -350,6 +340,41 @@ export class TerrainSystem {
   destroy(): void {
     this.initialized = false;
   }
+}
+
+function terrainMacro(shape: TerrainShape, u: number): number {
+  switch (shape) {
+    case 'twin_hills':
+      return -145 * gaussian(u, 0.23, 0.11) - 145 * gaussian(u, 0.77, 0.11) + 85 * gaussian(u, 0.5, 0.16);
+    case 'central_plateau': {
+      const edge = Math.abs(u - 0.5);
+      return -135 / (1 + Math.exp((edge - 0.2) * 45)) + 35 * gaussian(u, 0.12, 0.08) + 35 * gaussian(u, 0.88, 0.08);
+    }
+    case 'lowland_basin':
+      return 150 * gaussian(u, 0.5, 0.25) - 58 * gaussian(u, 0.12, 0.1) - 58 * gaussian(u, 0.88, 0.1);
+    case 'step_corridor':
+      return Math.round((u - 0.5) * 7) * 28 - 44 * Math.sin(u * Math.PI * 4);
+    case 'canyon_divide':
+      return -185 * gaussian(u, 0.5, 0.065) + 105 * gaussian(u, 0.32, 0.085) + 105 * gaussian(u, 0.68, 0.085);
+    case 'crater_field':
+      return 100 * gaussian(u, 0.2, 0.07) + 125 * gaussian(u, 0.5, 0.09) + 95 * gaussian(u, 0.8, 0.065)
+        - 48 * gaussian(u, 0.34, 0.055) - 52 * gaussian(u, 0.66, 0.055);
+    case 'rugged_peaks':
+      return -105 * gaussian(u, 0.14, 0.055) + 115 * gaussian(u, 0.28, 0.07)
+        - 155 * gaussian(u, 0.43, 0.065) + 125 * gaussian(u, 0.59, 0.075)
+        - 135 * gaussian(u, 0.75, 0.06) + 85 * gaussian(u, 0.89, 0.05);
+    case 'asymmetric_ridge':
+      return 150 * (u - 0.5) - 135 * gaussian(u, 0.3, 0.105) + 90 * gaussian(u, 0.72, 0.13);
+    case 'training_range':
+      return 8 * Math.sin(u * Math.PI * 2);
+    case 'open_arena':
+    default:
+      return -42 * Math.sin(u * Math.PI * 3) + 28 * Math.sin(u * Math.PI * 7);
+  }
+}
+
+function clampTerrainHeight(y: number, worldHeight: number): number {
+  return Math.max(worldHeight * 0.3, Math.min(worldHeight - 105, y));
 }
 
 function gaussian(x: number, center: number, width: number): number {
