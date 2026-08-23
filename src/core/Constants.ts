@@ -8,13 +8,13 @@ export const STORAGE_KEYS = {
 };
 
 export const COLORS = {
-  P1: '#4ec5ff', // 蓝青色
-  P1Dark: '#1f6ea8',
-  P2: '#ff7a4d', // 橙红色
-  P2Dark: '#a83a17',
-  HUDBackground: 'rgba(13, 24, 38, 0.82)',
-  HUDForeground: '#e7f1ff',
-  Accent: '#ffd166',
+  P1: '#36ddff', // 电弧蓝
+  P1Dark: '#087ba5',
+  P2: '#ff7847', // 等离子橙
+  P2Dark: '#b83217',
+  HUDBackground: 'rgba(4, 13, 25, 0.9)',
+  HUDForeground: '#eafaff',
+  Accent: '#71efff',
   Warning: '#ef476f',
   Success: '#06d6a0',
 };

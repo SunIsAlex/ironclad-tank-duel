@@ -171,44 +171,75 @@ export class TurnManager {
   }
 
   // 坦克沿地形移动：处理碰撞与坡度
-  // 将整步拆成若干小段（每段 ≤ 4px），逐段检查瞬时坡度
+  // 将整步拆成若干小段（每段 ≤ 2px），逐段检查履带姿态和瞬时坡度
   moveTank(
     tank: Tank,
     dir: -1 | 1,
     distance: number,
-    terrain: { surfaceY: (x: number) => number; worldWidth: number }
+    terrain: {
+      surfaceY: (x: number) => number;
+      worldWidth: number;
+      tankPose?: (x: number, fromY: number, trackWidth: number) => {
+        y: number;
+        angle: number;
+        supported: boolean;
+      };
+    }
   ): boolean {
     if (tank.movementFuel <= 0) return false;
     const want = Math.min(distance, tank.movementFuel);
     const worldMin = 14;
     const worldMax = terrain.worldWidth - 14;
     let moved = 0;
-    const subStep = 4;
+    const subStep = 2;
     while (moved < want) {
       const remain = want - moved;
       const step = Math.min(subStep, remain);
       const candidateX = clamp(tank.x + dir * step, worldMin, worldMax);
       if (candidateX === tank.x) break; // 撞到边界
-      const curY = terrain.surfaceY(tank.x);
-      const nextY = terrain.surfaceY(candidateX);
+      const currentPose = terrain.tankPose?.(tank.x, tank.y, TANK_CONFIG.bodyWidth);
+      const nextPose = terrain.tankPose?.(candidateX, tank.y, TANK_CONFIG.bodyWidth);
+      const curY = currentPose?.y ?? terrain.surfaceY(tank.x);
+      const nextY = nextPose?.y ?? terrain.surfaceY(candidateX);
       const dx = candidateX - tank.x;
       const dy = nextY - curY;
-      // 瞬时坡度（屏幕坐标系 y 向下，地形上坡 dy<0）
-      const slope = Math.abs(dy / Math.max(0.5, Math.abs(dx)));
-      if (slope > TANK_CONFIG.maxClimbSlope) {
-        // 太陡，本帧停止移动
-        break;
+      // 屏幕坐标系 y 向下：dy < 0 才是需要动力攀爬的上坡。
+      // 向下进入弹坑时即便坑壁很陡也必须允许前进，随后由落地阶段
+      // 处理支撑与坠落；若对 dy 取绝对值，弹坑边缘会变成无形墙。
+      const climbSlope = Math.max(0, -dy / Math.max(0.5, Math.abs(dx)));
+      if (climbSlope > TANK_CONFIG.maxClimbSlope) {
+        // 爆炸后的像素地形常在坑沿留下很窄的尖唇。以履带半宽向前
+        // 探测：若尖唇后方已经回到当前高度或更低，允许履带越过；
+        // 连续陡坡在整个探测范围内都更高，仍会被正确阻挡。
+        const probeDistance = TANK_CONFIG.bodyWidth / 2;
+        let clearsLip = false;
+        for (let probe = subStep * 2; probe <= probeDistance; probe += subStep) {
+          const probeX = clamp(tank.x + dir * probe, worldMin, worldMax);
+          if (terrain.surfaceY(probeX) >= curY) {
+            clearsLip = true;
+            break;
+          }
+        }
+        if (!clearsLip) break;
       }
       tank.x = candidateX;
-      tank.y = nextY;
+      if (!nextPose || nextY <= tank.y + 5) {
+        // 小台阶和正常坡面直接贴合；姿态角限制每个子步的变化量，消除
+        // 像素边缘导致的视觉顿挫。
+        tank.y = nextY;
+        tank.isGrounded = nextPose?.supported ?? true;
+        const targetAngle = nextPose?.angle ?? Math.atan2(
+          terrain.surfaceY(tank.x + 2) - terrain.surfaceY(tank.x - 2),
+          4
+        );
+        tank.bodyAngle += clamp(targetAngle - tank.bodyAngle, -0.06, 0.06);
+      } else {
+        // 驶入宽弹坑时只移动 X，不瞬移到坑底；下一物理帧由重力接管。
+        tank.isGrounded = false;
+      }
       moved += step;
     }
     if (moved === 0) return false;
-    // 车身角度跟随地表
-    const x0 = terrain.surfaceY(tank.x - 2);
-    const x1 = terrain.surfaceY(tank.x + 2);
-    const s = (x1 - x0) / 4;
-    tank.bodyAngle = Math.atan2(s, 1);
     tank.movementFuel = Math.max(0, tank.movementFuel - moved);
     return true;
   }

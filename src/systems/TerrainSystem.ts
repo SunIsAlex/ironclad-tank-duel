@@ -1,10 +1,15 @@
 import { WORLD_CONFIG, GROUND_THICKNESS } from '../config/gameConfig';
-import type { RNG } from '../utils/random';
 import { createRng } from '../utils/random';
 import { getMapPreset, MAP_PRESETS, type TerrainShape } from '../config/mapConfig';
 
-// 地形系统：维护离屏 Canvas + 1D 高度图 + 低分辨率碰撞掩码
-// 弹坑通过 destination-out 擦除并同步更新高度图与掩码
+// 地形系统：全分辨率二值体素是碰撞的唯一真源，Canvas 只负责显示。
+// 这样爆炸边缘的抗锯齿不会再让视觉地形与碰撞地形逐渐错位。
+
+export interface TankTerrainPose {
+  y: number;
+  angle: number;
+  supported: boolean;
+}
 
 export class TerrainSystem {
   readonly worldWidth: number;
@@ -17,12 +22,8 @@ export class TerrainSystem {
 
   // 高度图：每列地表高度
   heightMap: Int32Array;
-  // 低分辨率掩码（用于快速碰撞检测）。1 = 实体，0 = 空
-  // 每格代表 4x4 像素
-  readonly maskScale = 4;
-  maskWidth: number;
-  maskHeight: number;
-  mask: Uint8Array;
+  // 每个世界像素对应一格。1 = 实体，0 = 空；约占 2.1 MiB。
+  private solid: Uint8Array;
 
   initialized = false;
 
@@ -37,9 +38,7 @@ export class TerrainSystem {
     if (!ctx) throw new Error('Canvas 2D 上下文初始化失败');
     this.ctx = ctx;
     this.heightMap = new Int32Array(this.worldWidth);
-    this.maskWidth = Math.ceil(this.worldWidth / this.maskScale);
-    this.maskHeight = Math.ceil(this.worldHeight / this.maskScale);
-    this.mask = new Uint8Array(this.maskWidth * this.maskHeight);
+    this.solid = new Uint8Array(this.worldWidth * this.worldHeight);
   }
 
   generate(seed: string, mapPreset = 'generated'): void {
@@ -132,8 +131,8 @@ export class TerrainSystem {
       this.heightMap[x] = Math.round(points[x]);
     }
 
+    this.rebuildSolidFromHeightMap();
     this.drawTerrain();
-    this.rebuildMask();
     this.initialized = true;
   }
 
@@ -145,13 +144,13 @@ export class TerrainSystem {
     // 清空
     ctx.clearRect(0, 0, w, h);
 
-    // 渐变填充：草层 -> 土层
+    // 岩层渐变：冷色合金矿脉 + 深色可破坏地壳。
     const grad = ctx.createLinearGradient(0, this.ceiling, 0, h);
-    grad.addColorStop(0, '#6ab04c');
-    grad.addColorStop(0.05, '#5a9036');
-    grad.addColorStop(0.18, '#7d5a3c');
-    grad.addColorStop(0.55, '#5b3d24');
-    grad.addColorStop(1, '#321d10');
+    grad.addColorStop(0, '#2f7184');
+    grad.addColorStop(0.025, '#173f51');
+    grad.addColorStop(0.14, '#172d3b');
+    grad.addColorStop(0.55, '#101d28');
+    grad.addColorStop(1, '#070d14');
     ctx.fillStyle = grad;
 
     // 绘制实体地形多边形
@@ -165,21 +164,24 @@ export class TerrainSystem {
     ctx.fill();
 
     // 顶部高光线
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.18)';
-    ctx.lineWidth = 1.5;
+    ctx.shadowColor = '#35d6ff';
+    ctx.shadowBlur = 8;
+    ctx.strokeStyle = 'rgba(79, 222, 255, 0.72)';
+    ctx.lineWidth = 2;
     ctx.beginPath();
     for (let x = 0; x < w; x++) {
       if (x === 0) ctx.moveTo(x, this.heightMap[x]);
       else ctx.lineTo(x, this.heightMap[x]);
     }
     ctx.stroke();
+    ctx.shadowBlur = 0;
 
-    // 草点装饰
-    ctx.fillStyle = '#8bc34a';
-    for (let x = 0; x < w; x += 6) {
+    // 发光矿晶与地表刻痕。
+    for (let x = 0; x < w; x += 13) {
       const y = this.heightMap[x];
       const r = (sinLookup(x * 0.3) + 1) * 0.5;
-      ctx.fillRect(x, y - 2 - r * 2, 2, 3);
+      ctx.fillStyle = r > .72 ? 'rgba(89, 229, 255, .7)' : 'rgba(144, 188, 200, .24)';
+      ctx.fillRect(x, y - 2 - r * 2, r > .72 ? 2 : 1, 2 + r * 2);
     }
   }
 
@@ -202,44 +204,45 @@ export class TerrainSystem {
     if (xi < 0 || xi >= this.worldWidth) return false;
     if (yi >= this.worldHeight) return false;
     if (yi < 0) return false;
-    // 先用高度图快速判断
-    if (yi < this.heightMap[xi]) return false;
-    // 再用掩码精确判断（弹坑可能让中间变空）
-    const mx = (xi / this.maskScale) | 0;
-    const my = (yi / this.maskScale) | 0;
-    if (mx < 0 || mx >= this.maskWidth || my < 0 || my >= this.maskHeight) return false;
-    return this.mask[my * this.maskWidth + mx] === 1;
+    return this.solid[yi * this.worldWidth + xi] === 1;
   }
 
   // 在弹坑区域擦除地形
   carveCircle(cx: number, cy: number, radius: number, irregular = true): void {
+    if (!Number.isFinite(radius) || radius <= 0) return;
+    const points = createCraterPoints(cx, cy, radius, irregular);
+
+    // 先修改权威碰撞数据。使用像素中心和与绘制相同的多边形，重复爆炸
+    // 只是幂等地清零，不会产生粗掩码常见的 4px 台阶和隐形坑沿。
+    const xi0 = Math.max(0, Math.floor(cx - radius));
+    const xi1 = Math.min(this.worldWidth - 1, Math.ceil(cx + radius));
+    const yi0 = Math.max(0, Math.floor(cy - radius));
+    const yi1 = Math.min(this.worldHeight - 1, Math.ceil(cy + radius));
+    for (let y = yi0; y <= yi1; y++) {
+      const row = y * this.worldWidth;
+      for (let x = xi0; x <= xi1; x++) {
+        if (pointInPolygon(x + 0.5, y + 0.5, points)) {
+          this.solid[row + x] = 0;
+        }
+      }
+    }
+
     const ctx = this.ctx;
     ctx.save();
     ctx.globalCompositeOperation = 'destination-out';
     ctx.beginPath();
-    if (!irregular) {
-      ctx.arc(cx, cy, radius, 0, Math.PI * 2);
-    } else {
-      // 不规则边缘
-      const steps = 18;
-      const seed = (cx * 13.7 + cy * 7.3) | 0;
-      for (let i = 0; i <= steps; i++) {
-        const ang = (i / steps) * Math.PI * 2;
-        const r = radius * (0.88 + 0.12 * pseudo(seed + i));
-        const px = cx + Math.cos(ang) * r;
-        const py = cy + Math.sin(ang) * r;
-        if (i === 0) ctx.moveTo(px, py);
-        else ctx.lineTo(px, py);
-      }
+    for (let i = 0; i < points.length; i++) {
+      const point = points[i];
+      if (i === 0) ctx.moveTo(point.x, point.y);
+      else ctx.lineTo(point.x, point.y);
     }
     ctx.closePath();
     ctx.fill();
     ctx.restore();
-    // 更新掩码与高度图局部
-    this.invalidateRegion(cx - radius, cy - radius, cx + radius, cy + radius);
+    this.rebuildSurfaceRange(xi0, xi1);
   }
 
-  // 仅在 mask 上擦除，不影响 Canvas（用于钻地等纯碰撞修改，目前未使用）
+  // Canvas 被外部修改时可显式同步该区域。常规爆炸不走这条慢路径。
   invalidateRegion(x0: number, y0: number, x1: number, y1: number): void {
     const xi0 = Math.max(0, Math.floor(x0));
     const xi1 = Math.min(this.worldWidth - 1, Math.ceil(x1));
@@ -247,7 +250,7 @@ export class TerrainSystem {
     const yi1 = Math.min(this.worldHeight - 1, Math.ceil(y1));
     if (xi1 < xi0 || yi1 < yi0) return;
 
-    // 读取该区域像素并更新掩码
+    // 精确同步每个像素，绝不把一个透明像素扩大成整个 4x4 空格。
     const region = this.ctx.getImageData(xi0, yi0, xi1 - xi0 + 1, yi1 - yi0 + 1);
     const data = region.data;
     const rw = xi1 - xi0 + 1;
@@ -256,59 +259,35 @@ export class TerrainSystem {
         const alpha = data[(py * rw + px) * 4 + 3];
         const realX = xi0 + px;
         const realY = yi0 + py;
-        const mx = (realX / this.maskScale) | 0;
-        const my = (realY / this.maskScale) | 0;
-        if (mx < 0 || mx >= this.maskWidth || my < 0 || my >= this.maskHeight) continue;
-        const idx = my * this.maskWidth + mx;
-        if (alpha < 64) {
-          this.mask[idx] = 0;
-        } else if (this.mask[idx] === 0) {
-          // 不主动恢复为 1，避免反复写入
-        }
+        this.solid[realY * this.worldWidth + realX] = alpha >= 128 ? 1 : 0;
       }
     }
-
-    // 更新该 x 范围的高度图
-    for (let x = xi0; x <= xi1; x++) {
-      this.heightMap[x] = this.computeSurfaceY(x);
-    }
+    this.rebuildSurfaceRange(xi0, xi1);
   }
 
-  // 重新计算某列地表 Y（从顶向下找第一个实体像素）
+  // 重新计算某列地表 Y（从权威数据顶端找第一个实体像素）
   private computeSurfaceY(x: number): number {
-    // 先尝试用 mask 快速判断
-    const ctx = this.ctx;
-    // 读 1 像素宽列
-    const img = ctx.getImageData(x, 0, 1, this.worldHeight);
-    const data = img.data;
+    const w = this.worldWidth;
     for (let y = 0; y < this.worldHeight; y++) {
-      const a = data[y * 4 + 3];
-      if (a > 64) return y;
+      if (this.solid[y * w + x] === 1) return y;
     }
     return this.worldHeight;
   }
 
-  // 基于掩码的快速 surface Y 查询（用于坦克落地）
-  private rebuildMask(): void {
-    this.mask.fill(0);
-    const ctx = this.ctx;
+  private rebuildSolidFromHeightMap(): void {
+    this.solid.fill(0);
     const w = this.worldWidth;
     const h = this.worldHeight;
-    const mw = this.maskWidth;
-    const mh = this.maskHeight;
-    const s = this.maskScale;
-    // 按块采样
-    for (let my = 0; my < mh; my++) {
-      for (let mx = 0; mx < mw; mx++) {
-        const x = mx * s;
-        const y = my * s;
-        // 取中心像素 alpha
-        const img = ctx.getImageData(x + (s >> 1), y + (s >> 1), 1, 1);
-        if (img.data[3] > 64) {
-          this.mask[my * mw + mx] = 1;
-        }
+    for (let x = 0; x < w; x++) {
+      const startY = Math.max(0, Math.min(h, this.heightMap[x]));
+      for (let y = startY; y < h; y++) {
+        this.solid[y * w + x] = 1;
       }
     }
+  }
+
+  private rebuildSurfaceRange(x0: number, x1: number): void {
+    for (let x = x0; x <= x1; x++) this.heightMap[x] = this.computeSurfaceY(x);
   }
 
   // 检查某段是否完全是空的（用于坦克下落判断）
@@ -330,10 +309,65 @@ export class TerrainSystem {
     const xi = Math.floor(x);
     if (xi < 0) return this.heightMap[0];
     if (xi >= this.worldWidth) return this.heightMap[this.worldWidth - 1];
-    for (let yy = Math.floor(y); yy < this.worldHeight; yy++) {
+    const startY = Math.max(0, Math.min(this.worldHeight - 1, Math.floor(y)));
+
+    // 如果查询点已经进入地形，先回溯到这一实体层的上表面。击退或陡坡
+    // 不会因此把履带留在土里；洞穴下方的第二层地面也仍能正确识别。
+    if (this.isSolid(xi, startY)) {
+      let yy = startY;
+      while (yy > 0 && this.isSolid(xi, yy - 1)) yy--;
+      return yy;
+    }
+    for (let yy = startY + 1; yy < this.worldHeight; yy++) {
       if (this.isSolid(xi, yy)) return yy;
     }
     return this.worldHeight;
+  }
+
+  /**
+   * 求刚性履带在地形上的稳定姿态。左右履带区各自找接触点，再把车底
+   * 提升到不会穿过任一采样点的位置。小裂缝可以跨越，整个履带下方被
+   * 炸空时则会返回更深的支撑面，让坦克自然下落。
+   */
+  tankPose(x: number, fromY: number, trackWidth: number): TankTerrainPose {
+    const halfTrack = trackWidth * 0.44;
+    const sampleCount = 13;
+    const samples: Array<{ offset: number; y: number }> = [];
+    for (let i = 0; i < sampleCount; i++) {
+      const offset = -halfTrack + (i / (sampleCount - 1)) * halfTrack * 2;
+      const supportY = this.findSupportY(x + offset, fromY - 3);
+      samples.push({ offset, y: supportY });
+    }
+
+    const valid = samples.filter((sample) => sample.y < this.worldHeight);
+    if (valid.length === 0) {
+      return { y: this.worldHeight, angle: 0, supported: false };
+    }
+
+    const wheelBand = halfTrack * 0.45;
+    const left = highestSupport(valid.filter((sample) => sample.offset <= -wheelBand));
+    const right = highestSupport(valid.filter((sample) => sample.offset >= wheelBand));
+    let slope = 0;
+    if (left && right) {
+      slope = (right.y - left.y) / Math.max(1, right.offset - left.offset);
+    } else {
+      // 地图边缘或仅剩单侧接触时保持近似水平，避免角度无约束地翻转。
+      const first = valid[0];
+      const last = valid[valid.length - 1];
+      if (first !== last) slope = (last.y - first.y) / Math.max(1, last.offset - first.offset);
+    }
+    slope = Math.max(-1.25, Math.min(1.25, slope));
+
+    // 屏幕坐标 y 向下，最小值是最先碰到履带的地形约束。
+    let anchorY = this.worldHeight;
+    for (const sample of valid) {
+      anchorY = Math.min(anchorY, sample.y - slope * sample.offset);
+    }
+    return {
+      y: anchorY,
+      angle: Math.atan(slope),
+      supported: anchorY < this.worldHeight,
+    };
   }
 
   // 重置（清空所有改变）
@@ -390,4 +424,48 @@ function pseudo(n: number): number {
 
 function sinLookup(x: number): number {
   return Math.sin(x);
+}
+
+function highestSupport(samples: Array<{ offset: number; y: number }>): { offset: number; y: number } | null {
+  if (samples.length === 0) return null;
+  let result = samples[0];
+  for (let i = 1; i < samples.length; i++) {
+    if (samples[i].y < result.y) result = samples[i];
+  }
+  return result;
+}
+
+function createCraterPoints(
+  cx: number,
+  cy: number,
+  radius: number,
+  irregular: boolean
+): Array<{ x: number; y: number }> {
+  const steps = irregular ? 28 : 40;
+  const seed = (cx * 13.7 + cy * 7.3 + radius * 5.1) | 0;
+  const points: Array<{ x: number; y: number }> = [];
+  for (let i = 0; i < steps; i++) {
+    const angle = (i / steps) * Math.PI * 2;
+    const edgeScale = irregular ? 0.9 + 0.1 * pseudo(seed + i) : 1;
+    points.push({
+      x: cx + Math.cos(angle) * radius * edgeScale,
+      y: cy + Math.sin(angle) * radius * edgeScale,
+    });
+  }
+  return points;
+}
+
+function pointInPolygon(x: number, y: number, points: Array<{ x: number; y: number }>): boolean {
+  let inside = false;
+  for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
+    const a = points[i];
+    const b = points[j];
+    if (
+      (a.y > y) !== (b.y > y) &&
+      x < ((b.x - a.x) * (y - a.y)) / (b.y - a.y) + a.x
+    ) {
+      inside = !inside;
+    }
+  }
+  return inside;
 }

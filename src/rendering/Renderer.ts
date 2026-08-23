@@ -223,25 +223,46 @@ export class Renderer {
     ctx.save();
     ctx.translate(tank.x, tank.y);
     ctx.rotate(tank.bodyAngle);
-    // 阴影
-    ctx.fillStyle = 'rgba(0,0,0,0.35)';
+    // 紧贴履带的接触阴影；避免大块黑色椭圆看起来像地形空洞。
+    ctx.fillStyle = 'rgba(0, 5, 10, 0.24)';
     ctx.beginPath();
-    ctx.ellipse(0, 6, TANK_CONFIG.bodyWidth / 2, 4, 0, 0, Math.PI * 2);
+    ctx.ellipse(0, 4, TANK_CONFIG.bodyWidth * 0.36, 2.2, 0, 0, Math.PI * 2);
     ctx.fill();
-    // 履带
-    ctx.fillStyle = '#1b1b1b';
-    ctx.fillRect(-TANK_CONFIG.bodyWidth / 2, 0, TANK_CONFIG.bodyWidth, 6);
-    ctx.fillStyle = '#3a3a3a';
+    // 履带舱：圆角外壳、轮毂与高光取代基础矩形。
+    const halfW = TANK_CONFIG.bodyWidth / 2;
+    ctx.fillStyle = '#07101a';
+    ctx.strokeStyle = 'rgba(135, 208, 224, .45)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.roundRect(-halfW - 1, -1, TANK_CONFIG.bodyWidth + 2, 9, 4);
+    ctx.fill(); ctx.stroke();
     for (let i = -3; i <= 3; i++) {
-      ctx.fillRect(i * 5 - 1, 1, 2, 4);
+      ctx.fillStyle = '#233746';
+      ctx.beginPath(); ctx.arc(i * 5, 3.5, 2.4, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#07101a';
+      ctx.beginPath(); ctx.arc(i * 5, 3.5, 1, 0, Math.PI * 2); ctx.fill();
     }
 
     // 车身
     const hitFlash = tank.hitFlash > 0;
-    ctx.fillStyle = hitFlash ? '#ffffff' : color;
-    ctx.fillRect(-TANK_CONFIG.bodyWidth / 2, -TANK_CONFIG.bodyHeight, TANK_CONFIG.bodyWidth, TANK_CONFIG.bodyHeight - 2);
-    ctx.fillStyle = hitFlash ? '#ffffff' : COLORS.Accent;
-    ctx.fillRect(-TANK_CONFIG.bodyWidth / 2, -TANK_CONFIG.bodyHeight, TANK_CONFIG.bodyWidth, 2);
+    const armor = ctx.createLinearGradient(0, -TANK_CONFIG.bodyHeight, 0, 0);
+    armor.addColorStop(0, hitFlash ? '#fff' : color);
+    armor.addColorStop(.34, hitFlash ? '#fff' : color);
+    armor.addColorStop(1, '#0c1a24');
+    ctx.fillStyle = armor;
+    ctx.strokeStyle = hitFlash ? '#fff' : color;
+    ctx.shadowColor = color;
+    ctx.shadowBlur = isActive ? 8 : 3;
+    ctx.beginPath();
+    ctx.moveTo(-halfW + 3, -TANK_CONFIG.bodyHeight);
+    ctx.lineTo(halfW - 5, -TANK_CONFIG.bodyHeight);
+    ctx.lineTo(halfW, -4);
+    ctx.lineTo(halfW - 3, 0);
+    ctx.lineTo(-halfW + 2, 0);
+    ctx.lineTo(-halfW, -5);
+    ctx.closePath();
+    ctx.fill(); ctx.stroke();
+    ctx.shadowBlur = 0;
     // 车身侧标
     ctx.fillStyle = hitFlash ? '#222' : '#0b1622';
     ctx.font = 'bold 8px monospace';
@@ -257,18 +278,24 @@ export class Renderer {
     const combined = tank.bodyAngle - degToRad(tank.turretAngle);
     ctx.rotate(combined);
     // 炮管
-    ctx.fillStyle = '#2b2b2b';
+    const barrel = ctx.createLinearGradient(0, -3, 0, 3);
+    barrel.addColorStop(0, '#8fa8b5'); barrel.addColorStop(.5, '#263b48'); barrel.addColorStop(1, '#08121a');
+    ctx.fillStyle = barrel;
     ctx.fillRect(0, -TANK_CONFIG.barrelWidth / 2, TANK_CONFIG.barrelLength, TANK_CONFIG.barrelWidth);
-    ctx.fillStyle = COLORS.Accent;
-    ctx.fillRect(TANK_CONFIG.barrelLength - 2, -TANK_CONFIG.barrelWidth / 2, 2, TANK_CONFIG.barrelWidth);
+    ctx.shadowColor = color; ctx.shadowBlur = 7;
+    ctx.fillStyle = color;
+    ctx.fillRect(TANK_CONFIG.barrelLength - 3, -TANK_CONFIG.barrelWidth / 2 - 1, 3, TANK_CONFIG.barrelWidth + 2);
+    ctx.shadowBlur = 0;
     // 炮塔本体
-    ctx.fillStyle = hitFlash ? '#ffffff' : color;
+    ctx.fillStyle = hitFlash ? '#ffffff' : '#142b39';
+    ctx.strokeStyle = hitFlash ? '#ffffff' : color;
+    ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.arc(0, 0, TANK_CONFIG.turretRadius, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = 'rgba(0,0,0,0.3)';
+    ctx.fill(); ctx.stroke();
+    ctx.fillStyle = hitFlash ? '#fff' : color;
     ctx.beginPath();
-    ctx.arc(0, 0, TANK_CONFIG.turretRadius - 3, 0, Math.PI * 2);
+    ctx.arc(-2, -2, 2.4, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
 
@@ -277,7 +304,9 @@ export class Renderer {
       ctx.save();
       ctx.translate(tank.x, tank.y - 38);
       const bob = Math.sin(performance.now() / 200) * 2;
-      ctx.fillStyle = COLORS.Accent;
+      ctx.shadowColor = color;
+      ctx.shadowBlur = 10;
+      ctx.fillStyle = color;
       ctx.beginPath();
       ctx.moveTo(0, 8 + bob);
       ctx.lineTo(-6, 0 + bob);
@@ -298,11 +327,13 @@ export class Renderer {
     const w = 36;
     const h = 5;
     ctx.save();
-    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.fillStyle = 'rgba(2,9,16,0.85)';
     ctx.fillRect(x - w / 2 - 1, y - 1, w + 2, h + 2);
     ctx.fillStyle = '#0b1b2a';
     ctx.fillRect(x - w / 2, y, w, h);
     const r = Math.max(0, Math.min(1, ratio));
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 5;
     ctx.fillStyle = color;
     ctx.fillRect(x - w / 2, y, w * r, h);
     ctx.restore();

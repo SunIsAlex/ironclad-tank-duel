@@ -159,14 +159,12 @@ export class BattleScene implements Scene {
     const x1 = findSpawn(0.15, 0.3);
     const x2 = findSpawn(0.7, 0.85);
     this.tanks[0].x = x1;
-    this.tanks[0].y = terrain.surfaceY(x1);
     this.tanks[1].x = x2;
-    this.tanks[1].y = terrain.surfaceY(x2);
-    // 车身角度
     for (const t of this.tanks) {
-      const x0 = terrain.surfaceY(t.x - 2);
-      const x1n = terrain.surfaceY(t.x + 2);
-      t.bodyAngle = Math.atan2((x1n - x0) / 4, 1);
+      const pose = terrain.tankPose(t.x, 0, TANK_CONFIG.bodyWidth);
+      t.y = pose.y;
+      t.bodyAngle = pose.angle;
+      t.isGrounded = pose.supported;
     }
   }
 
@@ -253,6 +251,7 @@ export class BattleScene implements Scene {
         }
         this.consumeTreasureRewards();
         this.consumeExplosions();
+        this.updateTanksSettling(dt, false);
         if (!this.projectileSystem.hasAlive() && this.pendingExplosions.length === 0) {
           // 所有炮弹消失 -> 进入爆炸阶段（如果有未消化的）
           this.turn.enterExplosion();
@@ -274,9 +273,11 @@ export class BattleScene implements Scene {
         break;
       case 'EXPLOSION':
         // 短暂展示后进入伤害结算（伤害已在 consumeExplosions 中应用）
+        this.updateTanksSettling(dt, false);
         this.turn.phaseTimer = Math.min(this.turn.phaseTimer, 0.3);
         break;
       case 'DAMAGE_RESOLUTION':
+        this.updateTanksSettling(dt, false);
         break;
       case 'TERRAIN_SETTLING':
         this.updateTanksSettling(dt);
@@ -327,6 +328,9 @@ export class BattleScene implements Scene {
       this.turn.enterTurnEnd();
       return;
     }
+    // 防御性修正：若地形结算的最后一帧恰好把坦克水平推到空洞上方，
+    // 控制阶段继续完成落地，避免坦克永久悬空。
+    if (this.settleTankAtCurrentPosition(tank, dt)) return;
     // 镜头跟随当前坦克
     this.game.camera.followTank(tank.x, tank.y);
 
@@ -584,13 +588,23 @@ export class BattleScene implements Scene {
     }
   }
 
-  private updateTanksSettling(dt: number): void {
+  private updateTanksSettling(dt: number, extendSettlingPhase = true): void {
     const terrain = this.game.terrain;
     let anyFalling = false;
     for (const tank of this.tanks) {
       if (!tank.isAlive) continue;
+      // 必须先应用水平击退，再按新的 X 坐标查询地面。旧顺序会在
+      // 坦克被推离坑沿的同一帧误判“仍有支撑”，从而提前结束结算。
+      if (Math.abs(tank.velocityX) > 0.1) {
+        tank.x += tank.velocityX * dt;
+        tank.x = clamp(tank.x, 12, terrain.worldWidth - 12);
+        tank.velocityX *= 0.88;
+      } else {
+        tank.velocityX = 0;
+      }
       // 应用重力直到接触地面
-      const groundY = terrain.findSupportY(tank.x, tank.y);
+      const pose = terrain.tankPose(tank.x, tank.y, TANK_CONFIG.bodyWidth);
+      const groundY = pose.y;
       if (groundY > tank.y + 1) {
         // 下落
         tank.velocityY += WORLD_CONFIG.gravity * dt;
@@ -613,31 +627,54 @@ export class BattleScene implements Scene {
             }
           }
           tank.velocityY = 0;
-          tank.isGrounded = true;
+          tank.isGrounded = pose.supported;
         }
       } else {
         // 在地表，对齐
         tank.y = groundY;
         tank.velocityY = 0;
-        tank.isGrounded = true;
+        tank.isGrounded = pose.supported;
       }
-      // 水平击退阻尼
-      if (Math.abs(tank.velocityX) > 0.1) {
-        tank.x += tank.velocityX * dt;
-        tank.x = clamp(tank.x, 12, terrain.worldWidth - 12);
-        tank.velocityX *= 0.88;
-      } else {
-        tank.velocityX = 0;
+      // 接地后以时间常数平滑贴合坡面，帧率变化不会引发角度抖动。
+      if (tank.isGrounded) {
+        const angleBlend = 1 - Math.exp(-18 * dt);
+        tank.bodyAngle += (pose.angle - tank.bodyAngle) * angleBlend;
       }
-      // 车身角度跟随
-      const x0 = terrain.surfaceY(tank.x - 2);
-      const x1n = terrain.surfaceY(tank.x + 2);
-      tank.bodyAngle = Math.atan2((x1n - x0) / 4, 1);
     }
     // 仍有下落时延长 TERRAIN_SETTLING
-    if (anyFalling) {
+    if (anyFalling && extendSettlingPhase) {
       this.turn.phaseTimer = Math.max(this.turn.phaseTimer, 0.4);
     }
+  }
+
+  /**
+   * 控制阶段的落地保险。正常情况下 TERRAIN_SETTLING 已完成此工作；
+   * 返回 true 表示本帧仍在下落，不应同时接受移动或开火输入。
+   */
+  private settleTankAtCurrentPosition(tank: Tank, dt: number): boolean {
+    const terrain = this.game.terrain;
+    const pose = terrain.tankPose(tank.x, tank.y, TANK_CONFIG.bodyWidth);
+    const groundY = pose.y;
+    if (groundY <= tank.y + 1) {
+      tank.y = groundY;
+      tank.velocityY = 0;
+      tank.isGrounded = pose.supported;
+      const angleBlend = 1 - Math.exp(-18 * dt);
+      tank.bodyAngle += (pose.angle - tank.bodyAngle) * angleBlend;
+      return false;
+    }
+
+    tank.isGrounded = false;
+    tank.velocityY += WORLD_CONFIG.gravity * dt;
+    tank.y = Math.min(groundY, tank.y + tank.velocityY * dt);
+    if (tank.y >= groundY) {
+      tank.y = groundY;
+      tank.velocityY = 0;
+      tank.isGrounded = pose.supported;
+      tank.bodyAngle = pose.angle;
+      return false;
+    }
+    return true;
   }
 
   private resolveTurnLimit(): void {

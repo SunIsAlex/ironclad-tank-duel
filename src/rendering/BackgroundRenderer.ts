@@ -42,8 +42,8 @@ export class BackgroundRenderer {
     }
 
     // 远山
-    this.mountainsFar = this.buildMountain(rng, 80, '#26354d', 12);
-    this.mountainsNear = this.buildMountain(rng, 140, '#1d2a3e', 7);
+    this.mountainsFar = this.buildMountain(rng, 80, '#142a3d', 12);
+    this.mountainsNear = this.buildMountain(rng, 140, '#0b1927', 7);
 
     // 星星
     for (let i = 0; i < 60; i++) {
@@ -79,10 +79,10 @@ export class BackgroundRenderer {
   render(ctx: CanvasRenderingContext2D, reducedMotion: boolean): void {
     // 天空渐变
     const grad = ctx.createLinearGradient(0, 0, 0, this.height);
-    grad.addColorStop(0, '#0c1a2b');
-    grad.addColorStop(0.45, '#1a3a52');
-    grad.addColorStop(0.75, '#2c5a72');
-    grad.addColorStop(1, '#3e6f7c');
+    grad.addColorStop(0, '#020812');
+    grad.addColorStop(0.45, '#071a2d');
+    grad.addColorStop(0.76, '#10334a');
+    grad.addColorStop(1, '#172b38');
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, this.width, this.height);
 
@@ -93,14 +93,42 @@ export class BackgroundRenderer {
       ctx.fillRect(s.x, s.y, s.r, s.r);
     }
 
-    // 月亮
-    ctx.fillStyle = 'rgba(245, 240, 220, 0.85)';
+    // 具有冷色边缘光的行星，建立战术科幻场景的视觉锚点。
+    const planetX = this.width * 0.78;
+    const planetY = 108;
+    const planetGlow = ctx.createRadialGradient(planetX, planetY, 12, planetX, planetY, 64);
+    planetGlow.addColorStop(0, 'rgba(3, 10, 20, .96)');
+    planetGlow.addColorStop(.78, 'rgba(3, 10, 20, .96)');
+    planetGlow.addColorStop(.9, 'rgba(57, 220, 255, .55)');
+    planetGlow.addColorStop(1, 'rgba(57, 220, 255, 0)');
+    ctx.fillStyle = planetGlow;
     ctx.beginPath();
-    ctx.arc(this.width * 0.78, 90, 32, 0, Math.PI * 2);
+    ctx.arc(planetX, planetY, 64, 0, Math.PI * 2);
     ctx.fill();
-    ctx.fillStyle = 'rgba(0,0,0,0.22)';
+
+    // 极淡的全息网格让空旷区域保持层次，但不干扰弹道读取。
+    ctx.save();
+    ctx.strokeStyle = 'rgba(74, 213, 255, .045)';
+    ctx.lineWidth = 1;
+    for (let x = 0; x <= this.width; x += 80) {
+      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, this.height); ctx.stroke();
+    }
+    for (let y = 40; y < this.height; y += 64) {
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(this.width, y); ctx.stroke();
+    }
+    ctx.restore();
+
+    // 天际线冷光。
+    const horizon = ctx.createLinearGradient(0, this.height - 340, 0, this.height - 180);
+    horizon.addColorStop(0, 'rgba(20, 174, 214, 0)');
+    horizon.addColorStop(.65, 'rgba(20, 174, 214, .1)');
+    horizon.addColorStop(1, 'rgba(20, 174, 214, 0)');
+    ctx.fillStyle = horizon;
+    ctx.fillRect(0, this.height - 340, this.width, 160);
+
+    ctx.fillStyle = 'rgba(0,0,0,0.12)';
     ctx.beginPath();
-    ctx.arc(this.width * 0.78 + 9, 86, 26, 0, Math.PI * 2);
+    ctx.arc(planetX + 13, planetY - 6, 52, 0, Math.PI * 2);
     ctx.fill();
 
     // 远山
@@ -138,7 +166,7 @@ export class BackgroundRenderer {
     ctx.save();
     ctx.translate(c.x, c.y);
     ctx.scale(c.scale, c.scale);
-    ctx.fillStyle = 'rgba(220, 230, 240, 0.55)';
+    ctx.fillStyle = 'rgba(91, 171, 203, 0.10)';
     ctx.beginPath();
     ctx.ellipse(0, 0, 36, 12, 0, 0, Math.PI * 2);
     ctx.ellipse(20, -6, 24, 10, 0, 0, Math.PI * 2);

@@ -78,4 +78,72 @@ describe('回合管理', () => {
     expect(v.isDraw).toBe(false);
     expect(v.winnerIndex).toBe(0);
   });
+
+  it('允许坦克驶下陡峭弹坑边缘，但仍阻止攀上陡壁', () => {
+    const tank = createTank('t1', 0, 'P1', 96, 100, 100, 200, 'basic_shell');
+    const tm = new TurnManager([tank], new DamageSystem());
+    // x < 100 是坑外地面，x >= 100 是低 80px 的坑底。
+    const craterTerrain = {
+      worldWidth: 500,
+      surfaceY: (x: number) => x < 100 ? 100 : 180,
+    };
+
+    expect(tm.moveTank(tank, 1, 4, craterTerrain)).toBe(true);
+    expect(tank.x).toBe(100);
+    expect(tank.y).toBe(180);
+
+    // 反向面对同一垂直坑壁时属于陡峭上坡，应继续受爬坡能力限制。
+    expect(tm.moveTank(tank, -1, 4, craterTerrain)).toBe(false);
+    expect(tank.x).toBe(100);
+  });
+
+  it('履带可越过弹坑边缘的窄尖唇进入坑内', () => {
+    const tank = createTank('t1', 0, 'P1', 120, 100, 100, 200, 'basic_shell');
+    const tm = new TurnManager([tank], new DamageSystem());
+    const craterWithLip = {
+      worldWidth: 500,
+      surfaceY: (x: number) => {
+        if (x >= 116) return 100;
+        if (x >= 112) return 92; // 爆炸边缘残留的 8px 窄凸起
+        return 170; // 坑内
+      },
+    };
+
+    expect(tm.moveTank(tank, -1, 12, craterWithLip)).toBe(true);
+    expect(tank.x).toBe(108);
+    expect(tank.y).toBe(170);
+  });
+
+  it('使用履带姿态时驶入宽坑由重力接管，不瞬移到坑底', () => {
+    const tank = createTank('t1', 0, 'P1', 98, 100, 100, 200, 'basic_shell');
+    const tm = new TurnManager([tank], new DamageSystem());
+    const terrain = {
+      worldWidth: 500,
+      surfaceY: (x: number) => x < 100 ? 100 : 180,
+      tankPose: (x: number) => ({
+        y: x < 100 ? 100 : 180,
+        angle: 0,
+        supported: true,
+      }),
+    };
+
+    expect(tm.moveTank(tank, 1, 2, terrain)).toBe(true);
+    expect(tank.x).toBe(100);
+    expect(tank.y).toBe(100);
+    expect(tank.isGrounded).toBe(false);
+  });
+
+  it('亚像素移动距离会完整累计，不因分段取整产生卡顿', () => {
+    const tank = createTank('t1', 0, 'P1', 100, 100, 100, 200, 'basic_shell');
+    const tm = new TurnManager([tank], new DamageSystem());
+    const terrain = {
+      worldWidth: 500,
+      surfaceY: () => 100,
+      tankPose: () => ({ y: 100, angle: 0, supported: true }),
+    };
+
+    expect(tm.moveTank(tank, 1, 1.125, terrain)).toBe(true);
+    expect(tank.x).toBeCloseTo(101.125);
+    expect(tank.movementFuel).toBeCloseTo(198.875);
+  });
 });

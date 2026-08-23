@@ -18,14 +18,16 @@ export class MainMenu {
     this.root.className = 'main-menu';
     this.root.innerHTML = `
       <div class="mm-inner">
+        <div class="mm-kicker"><span></span> TACTICAL ARTILLERY SYSTEM <span></span></div>
         <h1 class="mm-title">铁甲对决</h1>
+        <div class="mm-version">IRONCLAD // DUEL PROTOCOL</div>
         <p class="mm-subtitle" id="mm-subtitle">${settings.opponentMode === 'ai' ? `单人挑战${settings.aiDifficulty === 'elite' ? '精英' : '普通'} AI` : '本地双人回合制坦克炮战'}</p>
         <div class="mm-players">
           <div class="mm-card p1">
             <div class="mm-tag">P1</div>
             <div class="mm-name" id="mm-p1">${escapeHtml(settings.player1Name)}</div>
           </div>
-          <div class="mm-vs">VS</div>
+          <div class="mm-vs"><small>DUEL</small>VS</div>
           <div class="mm-card p2">
             <div class="mm-tag" id="mm-p2-tag">${settings.opponentMode === 'ai' ? 'AI' : 'P2'}</div>
             <div class="mm-name" id="mm-p2">${escapeHtml(settings.player2Name)}</div>
