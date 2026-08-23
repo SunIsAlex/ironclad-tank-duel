@@ -309,4 +309,73 @@ describe('新增弹体机制', () => {
     system.update(0.1);
     expect(system.getProjectiles()[0].x).toBeGreaterThan(x);
   });
+
+  it('新星棘轮命中后释放 8 枚不可递归分裂的放射碎片', () => {
+    const terrain = { worldWidth: 1600, worldHeight: 720, surfaceY: () => 500 };
+    let first = true;
+    const collision = {
+      detectProjectileHit: () => {
+        if (!first) return null;
+        first = false;
+        return { type: 'terrain', x: 640, y: 500 };
+      },
+    };
+    const tank = { id: 't1', x: 200, y: 500, selectedWeaponId: 'nova_bloom' };
+    const system = new ProjectileSystem(terrain as never, collision as never, [tank] as never, {
+      value: 0,
+      displayStrength: 0,
+    });
+
+    system.fire(tank as never, 45, 400);
+    system.update(0.05);
+
+    const fragments = system.getProjectiles();
+    expect(fragments).toHaveLength(8);
+    expect(fragments.every((p) => p.isPayload && p.splitDone && p.splitTime === 0)).toBe(true);
+    expect(system.consumePendingExplosions()).toHaveLength(1);
+  });
+
+  it('星陨雨幕到达保险时间后展开为 7 枚向下散落的载荷', () => {
+    const terrain = { worldWidth: 4000, worldHeight: 4000, surfaceY: () => 3500 };
+    const collision = { detectProjectileHit: () => null };
+    const tank = { id: 't1', x: 500, y: 1200, selectedWeaponId: 'meteor_shower' };
+    const system = new ProjectileSystem(terrain as never, collision as never, [tank] as never, {
+      value: 0,
+      displayStrength: 0,
+    });
+
+    system.fire(tank as never, 65, 420);
+    system.update((getWeaponById('meteor_shower').splitTime ?? 0) + 0.01);
+
+    const payloads = system.getProjectiles();
+    expect(payloads).toHaveLength(7);
+    expect(payloads.every((p) => p.isPayload && p.vy > 0)).toBe(true);
+    expect(new Set(payloads.map((p) => Math.sign(p.vx))).size).toBeGreaterThan(1);
+  });
+
+  it('断层脉冲命中地面后沿地表生成 7 个等距震爆点', () => {
+    const terrain = {
+      worldWidth: 1600,
+      worldHeight: 720,
+      surfaceY: (x: number) => 480 + Math.round(x / 200),
+    };
+    const collision = {
+      detectProjectileHit: () => ({ type: 'terrain', x: 800, y: 484 }),
+    };
+    const tank = { id: 't1', x: 200, y: 500, selectedWeaponId: 'fault_line' };
+    const system = new ProjectileSystem(terrain as never, collision as never, [tank] as never, {
+      value: 0,
+      displayStrength: 0,
+    });
+
+    system.fire(tank as never, 45, 400);
+    system.update(0.05);
+
+    const explosions = system.consumePendingExplosions();
+    expect(explosions).toHaveLength(7);
+    expect(explosions[1].x - explosions[0].x).toBe(48);
+    expect(explosions[3].x).toBe(800);
+    expect(explosions[3].damage).toBeGreaterThan(explosions[0].damage);
+    expect(explosions.every((explosion) => explosion.y === terrain.surfaceY(explosion.x) - 2)).toBe(true);
+  });
 });

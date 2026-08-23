@@ -3,8 +3,8 @@ import { WEAPONS, getWeaponById } from '../src/config/weaponConfig';
 import { WeaponRegistry } from '../src/weapons/WeaponRegistry';
 
 describe('武器配置', () => {
-  it('至少 8 种武器', () => {
-    expect(WEAPONS.length).toBeGreaterThanOrEqual(8);
+  it('至少 16 种武器', () => {
+    expect(WEAPONS.length).toBeGreaterThanOrEqual(16);
   });
 
   it('每把武器都有唯一 id', () => {
@@ -31,9 +31,9 @@ describe('武器配置', () => {
   });
 
   it('覆盖原创基础武器与新增机制且关键参数有效', () => {
-    expect(WEAPONS.length).toBeGreaterThanOrEqual(10);
+    expect(WEAPONS.length).toBeGreaterThanOrEqual(16);
     expect(new Set(WEAPONS.map((w) => w.behavior))).toEqual(
-      new Set(['standard', 'split', 'cluster', 'bounce', 'drill', 'heavy', 'roller', 'airstrike'])
+      new Set(['standard', 'split', 'cluster', 'bounce', 'drill', 'heavy', 'roller', 'airstrike', 'burst', 'shower', 'seismic'])
     );
     expect(getWeaponById('triple_scatter').projectileCount).toBe(3);
     expect(getWeaponById('air_split').childCount).toBeGreaterThan(1);
@@ -44,12 +44,17 @@ describe('武器配置', () => {
     expect(getWeaponById('tide_stream').projectileSpeedStep).toBeGreaterThan(0);
     expect(getWeaponById('stone_runner').rollDistance).toBeGreaterThan(0);
     expect(getWeaponById('sky_coordinates').airstrikeCount).toBe(5);
+    expect(getWeaponById('arc_barrage').projectileCount).toBe(5);
+    expect(getWeaponById('nova_bloom').burstCount).toBe(8);
+    expect(getWeaponById('meteor_shower').childCount).toBe(7);
+    expect(getWeaponById('fault_line').seismicCount).toBe(7);
+    expect(getWeaponById('singularity_bomb').explosionRadius).toBeGreaterThan(100);
   });
 
   it('武器轮换包含有限弹药武器', () => {
     const reg = new WeaponRegistry();
     expect(reg.next('basic_shell')).toBe('triple_scatter');
-    expect(reg.prev('basic_shell')).toBe('sky_coordinates');
+    expect(reg.prev('basic_shell')).toBe('singularity_bomb');
   });
 });
 

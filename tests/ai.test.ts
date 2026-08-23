@@ -44,7 +44,7 @@ describe('AI 弹道规划', () => {
 
   it('精英模型由全部武器弹道样本训练且参数规模保持轻量', () => {
     expect(isEliteAIModelValid()).toBe(true);
-    expect(eliteAIModel.trainedWeaponProfiles).toBe(11);
+    expect(eliteAIModel.trainedWeaponProfiles).toBe(16);
     expect(eliteAIModel.trainedSamples).toBe(3200);
     const parameterCount = eliteAIModel.w1.length + eliteAIModel.b1.length +
       eliteAIModel.w2.length + eliteAIModel.b2.length;

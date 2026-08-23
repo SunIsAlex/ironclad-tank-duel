@@ -365,7 +365,7 @@ export class BattleScene implements Scene {
     if (weaponSwitchRequested) {
       cycleWeapon(tank, 1);
       // 跳过无弹药武器
-      let safety = 10;
+      let safety = weaponRegistry.all().length;
       while (!hasAmmo(tank, tank.selectedWeaponId) && safety-- > 0) {
         cycleWeapon(tank, 1);
       }

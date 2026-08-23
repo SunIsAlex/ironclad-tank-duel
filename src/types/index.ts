@@ -140,6 +140,10 @@ export interface WeaponDefinition {
   rollSpeed?: number;
   airstrikeCount?: number;
   airstrikeSpread?: number;
+  burstCount?: number;
+  burstSpeed?: number;
+  seismicCount?: number;
+  seismicSpacing?: number;
   behavior: WeaponBehavior;
   color: string;
   trailColor?: string;
@@ -156,7 +160,10 @@ export type WeaponBehavior =
   | 'drill'
   | 'heavy'
   | 'roller'
-  | 'airstrike';
+  | 'airstrike'
+  | 'burst'
+  | 'shower'
+  | 'seismic';
 
 export interface GameSettings {
   player1Name: string;

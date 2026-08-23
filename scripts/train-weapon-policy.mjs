@@ -16,6 +16,11 @@ const profiles = [
   { id: 'tide_stream', damage: 13, radius: 25, count: 6, speed: 1, gravity: 1, wind: 0.85, behavior: 'stream' },
   { id: 'stone_runner', damage: 40, radius: 42, count: 1, speed: 0.9, gravity: 1.05, wind: 0.65, behavior: 'roller' },
   { id: 'sky_coordinates', damage: 19, radius: 30, count: 5, speed: 1, gravity: 1, wind: 0.8, behavior: 'airstrike' },
+  { id: 'arc_barrage', damage: 19, radius: 32, count: 5, speed: 1.02, gravity: 1, wind: 0.9, behavior: 'barrage' },
+  { id: 'nova_bloom', damage: 12, radius: 22, count: 4, speed: 1, gravity: 0.95, wind: 0.75, behavior: 'burst' },
+  { id: 'meteor_shower', damage: 17, radius: 29, count: 7, speed: 0.96, gravity: 0.9, wind: 0.7, behavior: 'shower' },
+  { id: 'fault_line', damage: 18, radius: 30, count: 5, speed: 0.9, gravity: 1.12, wind: 0.55, behavior: 'seismic' },
+  { id: 'singularity_bomb', damage: 88, radius: 108, count: 1, speed: 0.78, gravity: 1.35, wind: 0.45, behavior: 'heavy' },
 ];
 const contexts = {
   near_calm: { distance: 380, wind: 0.5 }, near_windy: { distance: 380, wind: 2.5 },
@@ -35,6 +40,8 @@ function behaviorFactor(behavior, distance, wind) {
     cluster: { near: 0.74, mid: 1.3, far: 1.04 }, needle: { near: 0.84, mid: 1.08, far: 1.38 },
     stream: { near: 1.14, mid: 1.18, far: 0.9 }, roller: { near: 1.52, mid: 1.05, far: 0.5 },
     airstrike: { near: 0.62, mid: 1.12, far: 1.48 },
+    barrage: { near: 1.28, mid: 1.2, far: 0.88 }, burst: { near: 1.35, mid: 1.18, far: 0.82 },
+    shower: { near: 0.72, mid: 1.28, far: 1.52 }, seismic: { near: 1.62, mid: 1.4, far: 0.82 },
   };
   let factor = factors[behavior][range];
   if (wind > 1.5 && behavior === 'needle') factor *= 1.18;
@@ -48,7 +55,9 @@ function strength(profile, context, difficulty) {
   let accuracy = clamp(0.94 - Math.max(0, rangeRatio - 0.62) * 1.25 - context.wind * profile.wind * 0.055, 0.08, 0.95);
   if (difficulty === 'normal') {
     accuracy *= 0.76;
-    if (['split', 'cluster', 'bounce', 'roller', 'airstrike'].includes(profile.behavior)) accuracy *= 0.9;
+    if (['split', 'cluster', 'bounce', 'roller', 'airstrike', 'burst', 'shower', 'seismic'].includes(profile.behavior)) {
+      accuracy *= 0.9;
+    }
   } else accuracy *= 0.94;
   const multiHit = 1 + Math.log2(profile.count) * 0.24;
   const blast = 0.68 + profile.radius / 115;

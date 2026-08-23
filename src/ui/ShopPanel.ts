@@ -1,5 +1,5 @@
 import { WEAPONS } from '../config/weaponConfig';
-import { SHOP_ITEMS } from '../systems/ShopSystem';
+import { SHOP_ITEMS, SHOP_TIER_LABELS } from '../systems/ShopSystem';
 
 export interface ShopViewState {
   playerIndex: number;
@@ -45,7 +45,7 @@ export class ShopPanel {
           </div>
           <div class="shop-credits">◆ ${state.credits}</div>
         </div>
-        <p class="shop-tip">星火榴弹永久免费；购买会增加一组弹药，余额和未用弹药保留到后续小局。</p>
+        <p class="shop-tip">星火榴弹永久免费；军械按战地、进阶、精英、原型分档。购买会增加一组弹药，余额和库存跨小局保留，存点可换取后期重火力。</p>
         <div class="shop-grid">
           ${SHOP_ITEMS.map((item) => {
             const weapon = WEAPONS.find((candidate) => candidate.id === item.weaponId)!;
@@ -53,9 +53,9 @@ export class ShopPanel {
             const full = ammo >= weapon.ammo * 3;
             const disabled = state.credits < item.price || full;
             return `
-              <article class="shop-card" style="--weapon-color:${weapon.color}">
+              <article class="shop-card shop-tier-${item.tier}" style="--weapon-color:${weapon.color}">
                 <div class="shop-card-top">
-                  <strong>${escapeHtml(weapon.displayName)}</strong>
+                  <strong>${escapeHtml(weapon.displayName)} <small>${SHOP_TIER_LABELS[item.tier]}</small></strong>
                   <span>${item.price} 点</span>
                 </div>
                 <p>${escapeHtml(weapon.description)}</p>

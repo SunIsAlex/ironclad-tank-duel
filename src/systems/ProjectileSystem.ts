@@ -406,6 +406,11 @@ export class ProjectileSystem {
           const weapon = weaponRegistry.get(p.weaponId);
           if (weapon.behavior === 'airstrike' && !p.isPayload) {
             this.spawnAirstrike(p, hit.x);
+          } else if (weapon.behavior === 'burst' && !p.isPayload) {
+            this.queueExplosionFromProjectile(p, hit.tank!.id);
+            this.spawnRadialBurst(p, hit.x, hit.y);
+          } else if (weapon.behavior === 'seismic') {
+            this.spawnSeismicWave(p, hit.x, hit.tank!.id);
           } else {
             this.queueExplosionFromProjectile(p, hit.tank!.id);
           }
@@ -532,6 +537,64 @@ export class ProjectileSystem {
       payload.splitDone = true;
       payload.splitTime = 0;
       this.spawnsQueue.push(payload);
+    }
+  }
+
+  // 命中后从爆心向四周抛出碎片。碎片被标记为载荷，落地时只爆炸一次，
+  // 不会递归产生新的碎片；出生点向外偏移可避免在直击时全部重叠命中。
+  private spawnRadialBurst(parent: Projectile, impactX: number, impactY: number): void {
+    const weapon = weaponRegistry.get(parent.weaponId);
+    const count = weapon.burstCount ?? 8;
+    const speed = weapon.burstSpeed ?? 220;
+    const spawnOffset = 32;
+    for (let i = 0; i < count; i++) {
+      const angle = -Math.PI / 2 + (i / count) * Math.PI * 2;
+      const dx = Math.cos(angle);
+      const dy = Math.sin(angle);
+      const fragment = createProjectile(
+        parent.ownerId,
+        weapon,
+        impactX + dx * spawnOffset,
+        impactY + dy * spawnOffset,
+        dx * speed + parent.vx * 0.08,
+        dy * speed + parent.vy * 0.08,
+        false
+      );
+      fragment.isPayload = true;
+      fragment.splitDone = true;
+      fragment.splitTime = 0;
+      fragment.damage = weapon.maxDamage;
+      fragment.explosionRadius = weapon.explosionRadius;
+      this.spawnsQueue.push(fragment);
+    }
+  }
+
+  // 将一次落点转换为沿地表传播的奇数个震爆点。中心点保留直接命中
+  // 标记，两侧伤害略微衰减，既能撕开掩体又不会让全部爆炸叠在坦克上。
+  private spawnSeismicWave(
+    projectile: Projectile,
+    impactX: number,
+    directHitTankId: string | null
+  ): void {
+    const weapon = weaponRegistry.get(projectile.weaponId);
+    const count = Math.max(3, weapon.seismicCount ?? 7);
+    const spacing = weapon.seismicSpacing ?? 46;
+    const center = (count - 1) / 2;
+    for (let i = 0; i < count; i++) {
+      const offsetSteps = i - center;
+      const x = Math.max(4, Math.min(this.terrain.worldWidth - 4, impactX + offsetSteps * spacing));
+      const y = this.terrain.surfaceY(x) - 2;
+      const falloff = 1 - Math.abs(offsetSteps) * 0.08;
+      this.explosionsQueue.push({
+        x,
+        y,
+        radius: projectile.explosionRadius,
+        damage: Math.max(1, Math.round(projectile.damage * falloff)),
+        ownerTankId: projectile.ownerId,
+        directHitTankId: offsetSteps === 0 ? directHitTankId : null,
+        terrainDamageMultiplier: projectile.terrainDamageMultiplier,
+        weaponColor: weapon.color,
+      });
     }
   }
 
@@ -684,6 +747,21 @@ export class ProjectileSystem {
         p.alive = false;
         break;
       }
+      case 'burst': {
+        p.x = hitX;
+        p.y = hitY;
+        this.queueExplosionFromProjectile(p, null);
+        if (!p.isPayload) this.spawnRadialBurst(p, hitX, hitY);
+        p.alive = false;
+        break;
+      }
+      case 'seismic': {
+        p.x = hitX;
+        p.y = hitY;
+        this.spawnSeismicWave(p, hitX, null);
+        p.alive = false;
+        break;
+      }
       default: {
         p.x = hitX;
         p.y = hitY;
@@ -736,6 +814,29 @@ export class ProjectileSystem {
         proj.damage = weapon.maxDamage;
         proj.explosionRadius = Math.max(16, weapon.explosionRadius * 0.7);
         proj.splitTime = 0;
+        this.spawnsQueue.push(proj);
+      }
+      p.alive = false;
+    } else if (weapon.behavior === 'shower') {
+      const childCount = weapon.childCount ?? 7;
+      const childSpeed = weapon.childSpeed ?? 185;
+      const center = (childCount - 1) / 2;
+      for (let i = 0; i < childCount; i++) {
+        const normalized = center === 0 ? 0 : (i - center) / center;
+        const proj = createProjectile(
+          p.ownerId,
+          weapon,
+          p.x + normalized * 22,
+          p.y,
+          normalized * childSpeed * 0.78 + p.vx * 0.12,
+          childSpeed * (0.78 + Math.abs(normalized) * 0.16),
+          false
+        );
+        proj.isPayload = true;
+        proj.splitDone = true;
+        proj.splitTime = 0;
+        proj.damage = weapon.maxDamage;
+        proj.explosionRadius = weapon.explosionRadius;
         this.spawnsQueue.push(proj);
       }
       p.alive = false;

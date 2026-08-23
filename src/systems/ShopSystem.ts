@@ -4,23 +4,38 @@ import weaponPolicyData from '../models/weapon-policy.json';
 export const ROUND_CREDIT_INCOME = 700;
 export const WINNER_CREDIT_BONUS = 350;
 
+export type ShopTier = 'field' | 'advanced' | 'elite' | 'prototype';
+
 export interface ShopItem {
   weaponId: string;
   price: number;
+  tier: ShopTier;
 }
 
 export const SHOP_ITEMS: ShopItem[] = [
-  { weaponId: 'bounce_shot', price: 450 },
-  { weaponId: 'triple_scatter', price: 500 },
-  { weaponId: 'air_split', price: 550 },
-  { weaponId: 'stone_runner', price: 600 },
-  { weaponId: 'drill_shot', price: 650 },
-  { weaponId: 'micro_cluster', price: 700 },
-  { weaponId: 'tide_stream', price: 750 },
-  { weaponId: 'sky_coordinates', price: 800 },
-  { weaponId: 'aurora_needle', price: 850 },
-  { weaponId: 'heavy_impact', price: 900 },
+  { weaponId: 'bounce_shot', price: 300, tier: 'field' },
+  { weaponId: 'triple_scatter', price: 450, tier: 'field' },
+  { weaponId: 'air_split', price: 650, tier: 'field' },
+  { weaponId: 'stone_runner', price: 800, tier: 'field' },
+  { weaponId: 'drill_shot', price: 1000, tier: 'advanced' },
+  { weaponId: 'micro_cluster', price: 1250, tier: 'advanced' },
+  { weaponId: 'tide_stream', price: 1500, tier: 'advanced' },
+  { weaponId: 'arc_barrage', price: 1750, tier: 'advanced' },
+  { weaponId: 'nova_bloom', price: 2100, tier: 'elite' },
+  { weaponId: 'sky_coordinates', price: 2400, tier: 'elite' },
+  { weaponId: 'aurora_needle', price: 2700, tier: 'elite' },
+  { weaponId: 'meteor_shower', price: 3000, tier: 'elite' },
+  { weaponId: 'heavy_impact', price: 3400, tier: 'prototype' },
+  { weaponId: 'fault_line', price: 3800, tier: 'prototype' },
+  { weaponId: 'singularity_bomb', price: 4200, tier: 'prototype' },
 ];
+
+export const SHOP_TIER_LABELS: Record<ShopTier, string> = {
+  field: '战地',
+  advanced: '进阶',
+  elite: '精英',
+  prototype: '原型',
+};
 
 export interface PurchaseResult {
   success: boolean;
@@ -104,13 +119,29 @@ export function chooseAIShopItem(
     return credits >= item.price && (ammo[item.weaponId] ?? 0) < weapon.ammo * 3;
   });
   if (candidates.length === 0) return null;
-  return candidates.reduce((best, item) => {
+  const itemScore = (item: ShopItem): number => {
     const stockPenalty = (ammo[item.weaponId] ?? 0) > 0 ? 0.08 : 0;
-    const score = getWeaponWinRate(item.weaponId, context) - stockPenalty;
-    const bestPenalty = (ammo[best.weaponId] ?? 0) > 0 ? 0.08 : 0;
-    const bestScore = getWeaponWinRate(best.weaponId, context) - bestPenalty;
-    return score > bestScore ? item : best;
-  }).weaponId;
+    return getWeaponWinRate(item.weaponId, context) - stockPenalty;
+  };
+  const bestAffordable = candidates.reduce((best, item) =>
+    itemScore(item) > itemScore(best) ? item : best
+  );
+
+  // 已有可用特殊弹药时，AI 会比较尚未买得起的最佳军械。如果存点能
+  // 带来明显提升，本局不重复囤积低阶弹药，使四档价格真正影响 AI 决策。
+  const hasSpecialAmmo = SHOP_ITEMS.some((item) => (ammo[item.weaponId] ?? 0) > 0);
+  if (hasSpecialAmmo) {
+    const bestFuture = SHOP_ITEMS.reduce((best, item) =>
+      getWeaponWinRate(item.weaponId, context) > getWeaponWinRate(best.weaponId, context)
+        ? item
+        : best
+    );
+    if (
+      bestFuture.price > credits &&
+      getWeaponWinRate(bestFuture.weaponId, context) > itemScore(bestAffordable) + 0.12
+    ) return null;
+  }
+  return bestAffordable.weaponId;
 }
 
 export function chooseAICombatWeapon(

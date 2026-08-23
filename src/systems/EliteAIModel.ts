@@ -19,7 +19,7 @@ const TRAINED_POWER_MAX = 820;
 export function isEliteAIModelValid(model: EliteModelData = eliteAIModel): boolean {
   const { inputs, hidden, outputs } = model.architecture;
   return model.version === 2 && inputs === 9 && outputs === 2 &&
-    model.trainedSamples > 0 && model.trainedWeaponProfiles >= 11 &&
+    model.trainedSamples > 0 && model.trainedWeaponProfiles >= 16 &&
     model.w1.length === inputs * hidden && model.b1.length === hidden &&
     model.w2.length === hidden * outputs && model.b2.length === outputs &&
     [...model.w1, ...model.b1, ...model.w2, ...model.b2].every(Number.isFinite);
