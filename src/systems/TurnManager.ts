@@ -13,6 +13,7 @@ export class TurnManager {
   wind: WindState = { value: 0, displayStrength: 0 };
   windStrength = 2;
   turnTimeLimit = 0;
+  fixedPlayer: number | null = null;
   private turnStartTime = 0;
   private damageSystem: DamageSystem;
 
@@ -141,6 +142,16 @@ export class TurnManager {
 
   // 切换玩家，跳过已死亡的坦克
   switchPlayer(): void {
+    if (this.fixedPlayer !== null) {
+      const fixedTank = this.tanks[this.fixedPlayer];
+      if (!fixedTank?.isAlive) {
+        this.enterGameOver();
+        return;
+      }
+      this.currentPlayer = this.fixedPlayer;
+      this.roundCount++;
+      return;
+    }
     if (this.tanks.filter((t) => t.isAlive).length <= 1) {
       this.enterGameOver();
       return;

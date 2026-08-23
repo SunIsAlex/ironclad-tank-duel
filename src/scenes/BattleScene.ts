@@ -1,5 +1,5 @@
 import type { Game, Scene } from '../core/Game';
-import type { Tank, WindState, MissionStats } from '../types';
+import type { GameMode, Tank, WindState, MissionStats } from '../types';
 import { createTank, consumeAmmo, hasAmmo, cycleWeapon } from '../entities/Tank';
 import { TurnManager } from '../systems/TurnManager';
 import { ProjectileSystem } from '../systems/ProjectileSystem';
@@ -30,6 +30,7 @@ import {
   nextGameHealth,
   resolveRoundByHealth,
 } from '../systems/MatchRules';
+import { createTrainingLoadout, isTrainingTarget, restoreTrainingTarget } from '../systems/TrainingSystem';
 
 interface PendingExplosion {
   x: number;
@@ -45,6 +46,7 @@ interface PendingExplosion {
 
 export class BattleScene implements Scene {
   private game: Game;
+  readonly mode: GameMode;
   tanks: Tank[];
   turn: TurnManager;
   projectileSystem: ProjectileSystem;
@@ -89,8 +91,9 @@ export class BattleScene implements Scene {
   private shopPlayer = 0;
   private lastRoundWinner = -1;
 
-  constructor(game: Game) {
+  constructor(game: Game, mode: GameMode = 'duel') {
     this.game = game;
+    this.mode = mode;
     // 种子
     const settings = game.settings;
     this.nextHealth = [settings.initialHealth, settings.initialHealth];
@@ -106,15 +109,17 @@ export class BattleScene implements Scene {
     const hp = settings.initialHealth;
     const fuel = settings.movementFuel;
     const t1 = createTank('t1', 0, settings.player1Name, 0, 0, hp, fuel, 'basic_shell');
-    const t2 = createTank('t2', 1, settings.player2Name, 0, 0, hp, fuel, 'basic_shell');
+    const targetName = mode === 'training' ? '训练靶机' : settings.player2Name;
+    const t2 = createTank('t2', 1, targetName, 0, 0, hp, fuel, 'basic_shell');
     this.tanks = [t1, t2];
     this.placeTanks();
 
     this.wind = { value: 0, displayStrength: 0 };
     this.turn = new TurnManager(this.tanks, game.damageSystem);
+    this.turn.fixedPlayer = mode === 'training' ? 0 : null;
     this.turn.turnFuel = fuel;
     this.turn.windStrength = settings.windStrength;
-    this.turn.turnTimeLimit = settings.turnTime;
+    this.turn.turnTimeLimit = mode === 'training' ? 0 : settings.turnTime;
     this.turn.reset(this.tanks);
     this.turn.startGame();
 
@@ -133,8 +138,12 @@ export class BattleScene implements Scene {
     parent.appendChild(this.landscapeHint);
     this.updateLandscape();
 
-    this.applyInventoriesToTanks();
-    this.openShop(-1);
+    if (mode === 'training') {
+      this.applyTrainingRules();
+    } else {
+      this.applyInventoriesToTanks();
+      this.openShop(-1);
+    }
 
   }
 
@@ -216,15 +225,15 @@ export class BattleScene implements Scene {
     switch (this.turn.phase) {
       case 'TURN_START':
         // 第 10 次操作已经完整结算；第 11 回合只显示裁决，不再给予控制权。
-        if (this.turn.roundCount > MAX_TURNS_PER_GAME) {
+        if (this.mode !== 'training' && this.turn.roundCount > MAX_TURNS_PER_GAME) {
           this.resolveTurnLimit();
           return;
         }
-        if (this.chestRound !== this.turn.roundCount) {
+        if (this.mode !== 'training' && this.chestRound !== this.turn.roundCount) {
           this.projectileSystem.spawnRandomChest();
           this.chestRound = this.turn.roundCount;
         }
-        if (this.wormholeRound !== this.turn.roundCount) {
+        if (this.mode !== 'training' && this.wormholeRound !== this.turn.roundCount) {
           const appeared = this.projectileSystem.spawnWormholesForTurn(0.3);
           this.wormholeRound = this.turn.roundCount;
           if (appeared) this.turnHint = { text: '空间异常：双向黑洞出现！', life: 1.8 };
@@ -281,8 +290,16 @@ export class BattleScene implements Scene {
         break;
       case 'TERRAIN_SETTLING':
         this.updateTanksSettling(dt);
-        // 检查胜负
-        {
+        if (this.mode === 'training') {
+          restoreTrainingTarget(this.tanks[1]);
+          const player = this.tanks[0];
+          if (!player.isAlive) {
+            player.health = player.maxHealth;
+            player.isAlive = true;
+            this.turnHint = { text: '训练坦克已自动维修', life: 1.4 };
+          }
+        } else {
+          // 普通对战检查胜负；训练场为无限循环，不进入结算界面。
           const v = this.turn.checkVictory();
           if (v.isOver) {
             this.finishRound(v);
@@ -410,7 +427,8 @@ export class BattleScene implements Scene {
   }
 
   private isAITurn(): boolean {
-    return this.game.settings.opponentMode === 'ai' && this.turn.currentPlayer === 1;
+    return this.mode !== 'training' &&
+      this.game.settings.opponentMode === 'ai' && this.turn.currentPlayer === 1;
   }
 
   private handleAIControl(dt: number): void {
@@ -580,6 +598,11 @@ export class BattleScene implements Scene {
           owner.damageDealt += r.damage;
         }
       }
+      if (this.mode === 'training' && isTrainingTarget(tank)) {
+        restoreTrainingTarget(tank);
+        // 靶机可能刚被判定击毁；训练场立即修复并取消死亡表现。
+        r.killed = false;
+      }
       // 检查死亡 -> 触发爆炸动画
       if (r.killed) {
         this.game.particles.spawnExplosion(tank.x, tank.y - 8, 60, COLORS.Warning);
@@ -592,6 +615,7 @@ export class BattleScene implements Scene {
     const terrain = this.game.terrain;
     let anyFalling = false;
     for (const tank of this.tanks) {
+      if (this.mode === 'training' && isTrainingTarget(tank)) restoreTrainingTarget(tank);
       if (!tank.isAlive) continue;
       // 必须先应用水平击退，再按新的 X 坐标查询地面。旧顺序会在
       // 坦克被推离坑沿的同一帧误判“仍有支撑”，从而提前结束结算。
@@ -620,9 +644,13 @@ export class BattleScene implements Scene {
               tank.health -= dmg;
               this.game.particles.spawnDamageNumber(tank.x, tank.y - 30, dmg);
               if (tank.health <= 0) {
-                tank.health = 0;
-                tank.isAlive = false;
-                this.game.particles.spawnExplosion(tank.x, tank.y - 8, 60, COLORS.Warning);
+                if (this.mode === 'training' && isTrainingTarget(tank)) {
+                  restoreTrainingTarget(tank);
+                } else {
+                  tank.health = 0;
+                  tank.isAlive = false;
+                  this.game.particles.spawnExplosion(tank.x, tank.y - 8, 60, COLORS.Warning);
+                }
               }
             }
           }
@@ -640,6 +668,7 @@ export class BattleScene implements Scene {
         const angleBlend = 1 - Math.exp(-18 * dt);
         tank.bodyAngle += (pose.angle - tank.bodyAngle) * angleBlend;
       }
+      if (this.mode === 'training' && isTrainingTarget(tank)) restoreTrainingTarget(tank);
     }
     // 仍有下落时延长 TERRAIN_SETTLING
     if (anyFalling && extendSettlingPhase) {
@@ -771,6 +800,20 @@ export class BattleScene implements Scene {
     this.openShop(this.lastRoundWinner);
   }
 
+  private applyTrainingRules(): void {
+    const infiniteAmmo = createTrainingLoadout();
+    for (const tank of this.tanks) {
+      tank.ammo = { ...infiniteAmmo };
+      tank.selectedWeaponId = 'basic_shell';
+    }
+    restoreTrainingTarget(this.tanks[1]);
+    this.shopOpen = false;
+    this.turnHint = {
+      text: '训练场：全武器无限弹药 · 靶机无限耐久',
+      life: 3,
+    };
+  }
+
   private applyInventoriesToTanks(): void {
     this.tanks.forEach((tank, index) => {
       tank.ammo = { ...this.inventories[index] };
@@ -899,9 +942,11 @@ export class BattleScene implements Scene {
   private getPhaseHint(): string {
     switch (this.turn.phase) {
       case 'TURN_START':
-        return '回合开始';
+        return this.mode === 'training' ? '准备下一发...' : '回合开始';
       case 'PLAYER_CONTROL':
-        return this.isAITurn()
+        return this.mode === 'training'
+          ? '训练场：全武器 ∞  · Tab 切换 · 靶机无限耐久 · Esc 退出'
+          : this.isAITurn()
           ? `${this.game.settings.aiDifficulty === 'elite' ? '精英' : '普通'} AI 小模型正在判断并瞄准…`
           : '←/→ 移动  鼠标拖动瞄准  滚轮调力度  空格发射  Tab 切换武器';
       case 'PROJECTILE_FLYING':
@@ -915,7 +960,7 @@ export class BattleScene implements Scene {
       case 'TERRAIN_SETTLING':
         return '地形稳定中...';
       case 'TURN_END':
-        return '切换玩家...';
+        return this.mode === 'training' ? '重置训练回合...' : '切换玩家...';
       default:
         return '';
     }
@@ -947,22 +992,27 @@ export class BattleScene implements Scene {
       ctx.font = 'bold 12px monospace';
       ctx.textAlign = 'left';
       ctx.textBaseline = 'top';
-      const role = tank.playerIndex === 1 && this.game.settings.opponentMode === 'ai'
+      const trainingTarget = this.mode === 'training' && isTrainingTarget(tank);
+      const role = trainingTarget ? 'BOT' : tank.playerIndex === 1 && this.game.settings.opponentMode === 'ai'
         ? (this.game.settings.aiDifficulty === 'elite' ? '精英AI' : '普通AI')
         : `P${tank.playerIndex + 1}`;
-      ctx.fillText(`${tank.name}  ${role}  ◆${this.credits[tank.playerIndex]}${tank.isAlive ? '' : ' †'}`, x + 16, y + 6);
+      const credits = this.mode === 'training' ? '' : `  ◆${this.credits[tank.playerIndex]}`;
+      ctx.fillText(`${tank.name}  ${role}${credits}${tank.isAlive ? '' : ' †'}`, x + 16, y + 6);
       // 血条
       const barX = x + 16;
       const barY = y + 22;
       const barW = w - 24;
       ctx.fillStyle = '#0b1b2a';
       ctx.fillRect(barX, barY, barW, 8);
-      const ratio = Math.max(0, tank.health / tank.maxHealth);
+      const ratio = trainingTarget ? 1 : Math.max(0, tank.health / tank.maxHealth);
       ctx.fillStyle = ratio > 0.4 ? COLORS.Success : COLORS.Warning;
       ctx.fillRect(barX, barY, barW * ratio, 8);
       ctx.fillStyle = COLORS.HUDForeground;
       ctx.font = '10px monospace';
-      ctx.fillText(`${Math.ceil(tank.health)} / ${tank.maxHealth}`, barX, barY + 10);
+      ctx.fillText(
+        trainingTarget ? '耐久 ∞' : `${Math.ceil(tank.health)} / ${tank.maxHealth}`,
+        barX, barY + 10
+      );
     };
 
     drawPlayer(this.tanks[0], 12, this.turn.currentPlayer === 0);
@@ -972,11 +1022,19 @@ export class BattleScene implements Scene {
     ctx.fillStyle = COLORS.HUDForeground;
     ctx.font = 'bold 14px monospace';
     ctx.textAlign = 'center';
-    ctx.fillText(`第 ${this.gameNumber}/${MATCH_MAX_GAMES} 局 · ${this.matchWins[0]}:${this.matchWins[1]}`, cx, 8);
+    ctx.fillText(
+      this.mode === 'training'
+        ? '训练场 // TARGET RANGE'
+        : `第 ${this.gameNumber}/${MATCH_MAX_GAMES} 局 · ${this.matchWins[0]}:${this.matchWins[1]}`,
+      cx, 8
+    );
     // 风
     const arrow = this.wind.value > 0 ? '→' : this.wind.value < 0 ? '←' : '·';
     ctx.font = '12px monospace';
-    ctx.fillText(`回合 ${Math.min(this.turn.roundCount, MAX_TURNS_PER_GAME)}/${MAX_TURNS_PER_GAME} · 风 ${arrow} ${Math.abs(this.wind.value).toFixed(2)}`, cx, 26);
+    const roundLabel = this.mode === 'training'
+      ? `第 ${this.turn.roundCount} 发`
+      : `回合 ${Math.min(this.turn.roundCount, MAX_TURNS_PER_GAME)}/${MAX_TURNS_PER_GAME}`;
+    ctx.fillText(`${roundLabel} · 风 ${arrow} ${Math.abs(this.wind.value).toFixed(2)}`, cx, 26);
     ctx.fillStyle = this.turn.currentPlayer === 0 ? COLORS.P1 : COLORS.P2;
     ctx.font = 'bold 12px monospace';
     ctx.fillText(`当前：${this.tanks[this.turn.currentPlayer]?.name ?? ''}`, cx, 42);
@@ -1031,7 +1089,7 @@ export class BattleScene implements Scene {
       return true;
     }
     if (e.key.toLowerCase() === 'r' && this.turn.phase === 'GAME_OVER') {
-      this.game.gotoBattle();
+      this.game.gotoBattle(this.mode);
     }
     return false;
   }

@@ -125,6 +125,14 @@
   justify-items: center;
   margin-bottom: 20px;
 }
+.mm-primary-actions,
+.mm-secondary-actions {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.mm-primary-actions .btn-large { min-width: 220px; }
 .mm-hint {
   color: var(--muted);
   font-size: 12px;
@@ -148,6 +156,13 @@
 .btn:hover { background: rgba(68,217,255,.1); border-color:rgba(74,224,255,.55); box-shadow:0 0 18px rgba(54,221,255,.12); }
 .btn:active { transform: scale(0.97); }
 .btn-primary { background:linear-gradient(180deg,#aaf7ff,#39cce9); color:#03121a; border:1px solid #bffaff; box-shadow:0 0 22px rgba(54,221,255,.28), inset 0 0 12px rgba(255,255,255,.35); clip-path:polygon(9px 0,100% 0,100% calc(100% - 9px),calc(100% - 9px) 100%,0 100%,0 9px); }
+.btn-training {
+  background: linear-gradient(180deg, rgba(255, 225, 105, .2), rgba(247, 127, 0, .14));
+  border-color: rgba(255, 209, 102, .62);
+  color: #ffe169;
+  box-shadow: 0 0 18px rgba(247, 127, 0, .12);
+}
+.btn-training:hover { border-color: #ffe169; background: rgba(247, 127, 0, .2); }
 .btn-ghost { background: transparent; }
 .btn-large { padding: 14px 32px; font-size: 16px; min-width: 240px; }
 

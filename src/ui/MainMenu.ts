@@ -3,6 +3,7 @@ import type { GameSettings } from '../types';
 
 export interface MainMenuCallbacks {
   onPlay: () => void;
+  onTraining: () => void;
   onSettings: () => void;
   onHelp: () => void;
   onAbout: () => void;
@@ -34,10 +35,15 @@ export class MainMenu {
           </div>
         </div>
         <div class="mm-actions">
-          <button id="mm-play" class="btn btn-primary btn-large">${settings.opponentMode === 'ai' ? '开始人机对战' : '开始本地双人游戏'}</button>
-          <button id="mm-settings" class="btn btn-ghost">游戏设置</button>
-          <button id="mm-help" class="btn btn-ghost">操作说明</button>
-          <button id="mm-about" class="btn btn-ghost">关于游戏</button>
+          <div class="mm-primary-actions">
+            <button id="mm-play" class="btn btn-primary btn-large">${settings.opponentMode === 'ai' ? '开始人机对战' : '开始本地双人游戏'}</button>
+            <button id="mm-training" class="btn btn-training btn-large">进入训练场</button>
+          </div>
+          <div class="mm-secondary-actions">
+            <button id="mm-settings" class="btn btn-ghost">游戏设置</button>
+            <button id="mm-help" class="btn btn-ghost">操作说明</button>
+            <button id="mm-about" class="btn btn-ghost">关于游戏</button>
+          </div>
         </div>
         <p class="mm-hint" id="mm-hint">${settings.opponentMode === 'ai' ? '你是 P1，AI 将自动操作 P2' : '两人共用同一套按键 / 触控按钮轮流操作'}</p>
       </div>
@@ -66,6 +72,7 @@ export class MainMenu {
 
   private bind(): void {
     this.root.querySelector<HTMLButtonElement>('#mm-play')!.addEventListener('click', () => this.cb.onPlay());
+    this.root.querySelector<HTMLButtonElement>('#mm-training')!.addEventListener('click', () => this.cb.onTraining());
     this.root.querySelector<HTMLButtonElement>('#mm-settings')!.addEventListener('click', () => this.cb.onSettings());
     this.root.querySelector<HTMLButtonElement>('#mm-help')!.addEventListener('click', () => this.cb.onHelp());
     this.root.querySelector<HTMLButtonElement>('#mm-about')!.addEventListener('click', () => this.cb.onAbout());

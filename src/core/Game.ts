@@ -3,7 +3,7 @@ import { GameLoop } from './GameLoop';
 import { SceneManager, type Scene } from './SceneManager';
 import { audioSystem } from '../systems/AudioSystem';
 import { saveSystem } from '../systems/SaveSystem';
-import type { GameSettings } from '../types';
+import type { GameMode, GameSettings } from '../types';
 import { DEFAULT_SETTINGS } from '../config/gameConfig';
 import { InputManager, isFormElement, shouldPreventDefault } from '../systems/InputManager';
 import { MobileControls } from '../systems/MobileControls';
@@ -103,13 +103,13 @@ export class Game {
     this.sceneMgr.change(menu);
   }
 
-  gotoBattle(): void {
+  gotoBattle(mode: GameMode = 'duel'): void {
     audioSystem.init();
     audioSystem.resume();
     if (this.battle) {
       this.battle.destroy();
     }
-    const battle = new BattleScene(this);
+    const battle = new BattleScene(this, mode);
     this.battle = battle;
     this.sceneMgr.change(battle);
   }

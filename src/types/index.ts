@@ -183,6 +183,8 @@ export interface GameSettings {
   reducedMotion: boolean;
 }
 
+export type GameMode = 'duel' | 'training';
+
 export type GamePhase =
   | 'GAME_START'
   | 'TURN_START'

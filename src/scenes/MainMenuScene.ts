@@ -1,7 +1,7 @@
 import type { Game, Scene } from '../core/Game';
 import { MainMenu } from '../ui/MainMenu';
 import { SettingsPanel } from '../ui/SettingsPanel';
-import type { GameSettings } from '../types';
+import type { GameMode, GameSettings } from '../types';
 
 interface HelpData {
   keys: Array<{ k: string; d: string }>;
@@ -31,7 +31,8 @@ export class MainMenuScene implements Scene {
     this.game = game;
     const parent = game.canvas.parentElement!;
     this.menu = new MainMenu(parent, game.settings, {
-      onPlay: () => this.startBattle(),
+      onPlay: () => this.startBattle('duel'),
+      onTraining: () => this.startBattle('training'),
       onSettings: () => this.settings.show(),
       onHelp: () => this.showOverlay(this.helpOverlay),
       onAbout: () => this.showOverlay(this.aboutOverlay),
@@ -53,7 +54,7 @@ export class MainMenuScene implements Scene {
     this.menu.updatePlayers(s);
   }
 
-  private startBattle(): void {
+  private startBattle(mode: GameMode): void {
     // 销毁 UI
     this.menu.hide();
     this.menu.destroy();
@@ -61,7 +62,7 @@ export class MainMenuScene implements Scene {
     this.helpOverlay.remove();
     this.aboutOverlay.remove();
     this.landscapeHint.remove();
-    this.game.gotoBattle();
+    this.game.gotoBattle(mode);
   }
 
   private createOverlay(inner: string): HTMLElement {
