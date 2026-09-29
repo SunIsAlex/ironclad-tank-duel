@@ -57,6 +57,14 @@ export class OnlineSession {
   }
 
   close(): void {
+    if (this.roomCode && this.token) {
+      void fetch(this.apiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'close', roomCode: this.roomCode, playerIndex: this.localPlayer, token: this.token }),
+        cache: 'no-store',
+      }).catch(() => undefined);
+    }
     this.stopped = true;
     this.pollController?.abort();
   }

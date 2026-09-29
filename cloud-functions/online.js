@@ -109,6 +109,11 @@ async function handlePost(request, store) {
     return json({ error: '房间身份验证失败。' }, 403);
   }
 
+  if (message.type === 'close') {
+    await store.delete(`rooms/${code}`);
+    return json({ ok: true });
+  }
+
   if (message.type === 'start') {
     if (playerIndex !== 0 || room.status !== 'ready') return json({ error: '房间尚未准备好。' }, 409);
     room.status = 'playing';
