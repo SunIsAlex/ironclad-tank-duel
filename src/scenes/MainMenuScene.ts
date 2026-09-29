@@ -128,8 +128,8 @@ export class MainMenuScene implements Scene {
     };
     join.onclick = () => {
       const code = this.onlineLobby.querySelector<HTMLInputElement>('#online-code')!.value.trim();
-      if (!/^[A-Z0-9]{5,8}$/i.test(code)) {
-        status.textContent = '请输入 5 至 8 位配对码。';
+      if (!/^[A-Z0-9]{6}$/i.test(code)) {
+        status.textContent = '请输入 6 位配对码。';
         return;
       }
       status.textContent = '正在加入房间…';

@@ -475,7 +475,7 @@ export class BattleScene implements Scene {
     if (!session || this.mode !== 'online') return;
     this.onlinePublishTimer -= 1 / 60;
     if (this.onlinePublishTimer > 0 && !force) return;
-    this.onlinePublishTimer = 0.05;
+    this.onlinePublishTimer = 0.1;
     const move = moveDir < 0 ? -1 : moveDir > 0 ? 1 : 0;
     session.sendInput({
       move: move as OnlineInput['move'],

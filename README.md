@@ -8,7 +8,7 @@
 - **核心玩法**：本地 Hot-seat 双人回合制 2D 炮战；可破坏地形；多种原创武器；风力影响弹道
 - **训练场**：主菜单可直接进入；跳过商店与随机事件，玩家连续射击，16 种武器全部无限弹药，训练靶机无限耐久并保留伤害数字与击退反馈
 - **技术栈**：Vite + TypeScript + HTML5 Canvas 2D + CSS3 + Web Audio API + Pointer Events + localStorage + PWA Service Worker
-- **联机方式**：EdgeOne Pages Node Functions WebSocket 房间中继；无需账号
+- **联机方式**：EdgeOne Pages Node Functions 与 Pages Blob 配对房间和输入中继；无需账号
 - **双层离线 AI**：普通 AI 使用 `6→16→2` 人类化模型；精英 AI 使用按 16 种武器、风向、距离和高差训练的 `9→24→2` 多武器模型
 - **自对战武器策略**：普通/精英 AI 在六类距离与风况中模拟超过 55 万场武器对局，按条件胜率购买和选用武器
 - **双向黑洞**：部分回合随机出现蓝/红黑洞，炮弹进入一端后从另一端反向平行射出；AI 使用专门的黑洞模型和传送弹道搜索
@@ -164,9 +164,9 @@ npm test
 
 ## EdgeOne Pages 联机部署
 
-联机中继位于 `cloud-functions/online.js`，静态前端默认连接当前站点的 `/online` WebSocket 路由。将项目部署到启用 Node Functions 的 EdgeOne Pages 项目，并启用 WebSocket 后，双方分别打开站点，在“配对码联机”中由房主创建房间，另一位玩家输入 6 位配对码加入；房主点击“开始对战”。当前在线模式不开放局间军械商店。
+联机 API 位于 `cloud-functions/online.js`，前端通过长轮询连接当前站点的 `/online` 路由。先在 EdgeOne Pages 项目中创建名为 `tank-duel-rooms` 的 Blob Store，再部署并启用 Node Functions。双方打开站点，在“配对码联机”中由房主创建房间，另一位玩家输入 6 位配对码加入；房主点击“开始对战”。当前在线模式不开放局间军械商店。
 
-如果中继使用了独立域名或路由，可在构建环境设置 `VITE_ONLINE_WS_URL` 为完整的 `wss://...` 地址。纯 Vite 开发服务器不提供 Node Functions 路由；通过 `npm run dev:edgeone` 启动 EdgeOne Pages 本地调试环境，或部署到 EdgeOne Pages 后进行联机。
+如果 API 使用了独立域名或路由，可在构建环境设置 `VITE_ONLINE_API_URL` 为完整的 `https://...` 地址。纯 Vite 开发服务器不提供 Node Functions 路由；通过 `npm run dev:edgeone` 启动 EdgeOne Pages 本地调试环境，或部署到 EdgeOne Pages 后进行联机。
 
 ## 测试说明
 

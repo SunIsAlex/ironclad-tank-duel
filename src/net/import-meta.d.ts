@@ -1,5 +1,5 @@
 interface ImportMetaEnv {
-  readonly VITE_ONLINE_WS_URL?: string;
+  readonly VITE_ONLINE_API_URL?: string;
 }
 
 interface ImportMeta {
