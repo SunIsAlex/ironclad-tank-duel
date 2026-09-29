@@ -3,6 +3,7 @@ import type { GameSettings } from '../types';
 
 export interface MainMenuCallbacks {
   onPlay: () => void;
+  onOnline: () => void;
   onTraining: () => void;
   onSettings: () => void;
   onHelp: () => void;
@@ -37,6 +38,7 @@ export class MainMenu {
         <div class="mm-actions">
           <div class="mm-primary-actions">
             <button id="mm-play" class="btn btn-primary btn-large">${settings.opponentMode === 'ai' ? '开始人机对战' : '开始本地双人游戏'}</button>
+            <button id="mm-online" class="btn btn-large">配对码联机</button>
             <button id="mm-training" class="btn btn-training btn-large">进入训练场</button>
           </div>
           <div class="mm-secondary-actions">
@@ -72,6 +74,7 @@ export class MainMenu {
 
   private bind(): void {
     this.root.querySelector<HTMLButtonElement>('#mm-play')!.addEventListener('click', () => this.cb.onPlay());
+    this.root.querySelector<HTMLButtonElement>('#mm-online')!.addEventListener('click', () => this.cb.onOnline());
     this.root.querySelector<HTMLButtonElement>('#mm-training')!.addEventListener('click', () => this.cb.onTraining());
     this.root.querySelector<HTMLButtonElement>('#mm-settings')!.addEventListener('click', () => this.cb.onSettings());
     this.root.querySelector<HTMLButtonElement>('#mm-help')!.addEventListener('click', () => this.cb.onHelp());

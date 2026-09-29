@@ -2,6 +2,8 @@ import type { Game, Scene } from '../core/Game';
 import { MainMenu } from '../ui/MainMenu';
 import { SettingsPanel } from '../ui/SettingsPanel';
 import type { GameMode, GameSettings } from '../types';
+import { OnlineSession, type OnlineStartData } from '../net/OnlineSession';
+import { generateRandomSeed } from '../utils/random';
 
 interface HelpData {
   keys: Array<{ k: string; d: string }>;
@@ -26,12 +28,16 @@ export class MainMenuScene implements Scene {
   private helpOverlay: HTMLElement;
   private aboutOverlay: HTMLElement;
   private landscapeHint: HTMLElement;
+  private onlineLobby: HTMLElement;
+  private onlineSession: OnlineSession | null = null;
+  private onlineHost = false;
 
   constructor(game: Game) {
     this.game = game;
     const parent = game.canvas.parentElement!;
     this.menu = new MainMenu(parent, game.settings, {
       onPlay: () => this.startBattle('duel'),
+      onOnline: () => this.showOnlineLobby(),
       onTraining: () => this.startBattle('training'),
       onSettings: () => this.settings.show(),
       onHelp: () => this.showOverlay(this.helpOverlay),
@@ -41,8 +47,10 @@ export class MainMenuScene implements Scene {
     this.helpOverlay = this.createOverlay(this.renderHelp());
     this.aboutOverlay = this.createOverlay(this.renderAbout());
     this.landscapeHint = this.createLandscapeHint();
+    this.onlineLobby = this.createOnlineLobby();
     parent.appendChild(this.helpOverlay);
     parent.appendChild(this.aboutOverlay);
+    parent.appendChild(this.onlineLobby);
     parent.appendChild(this.landscapeHint);
     this.menu.show();
     this.updateLandscape();
@@ -61,8 +69,113 @@ export class MainMenuScene implements Scene {
     this.settings.hide();
     this.helpOverlay.remove();
     this.aboutOverlay.remove();
+    this.onlineLobby.remove();
     this.landscapeHint.remove();
     this.game.gotoBattle(mode);
+  }
+
+  private showOnlineLobby(): void {
+    this.onlineSession?.close();
+    const session = new OnlineSession();
+    this.onlineSession = session;
+    this.onlineHost = false;
+    this.game.onlineSession = session;
+    const status = this.onlineLobby.querySelector<HTMLElement>('#online-status')!;
+    const room = this.onlineLobby.querySelector<HTMLElement>('#online-room')!;
+    const start = this.onlineLobby.querySelector<HTMLButtonElement>('#online-start')!;
+    const create = this.onlineLobby.querySelector<HTMLButtonElement>('#online-create')!;
+    const join = this.onlineLobby.querySelector<HTMLButtonElement>('#online-join')!;
+    room.textContent = '';
+    status.textContent = '选择创建房间或输入好友的配对码。';
+    start.hidden = true;
+    create.disabled = false;
+    join.disabled = false;
+    session.on('created', (message) => {
+      this.onlineHost = true;
+      session.roomCode = String(message.code ?? '');
+      room.textContent = `配对码：${session.roomCode}`;
+      status.textContent = '房间已创建，等待另一位玩家加入。';
+    });
+    session.on('joined', () => {
+      status.textContent = '两位玩家已就绪。房主可以开始对战。';
+      start.hidden = !this.onlineHost;
+    });
+    session.on('start', (message) => {
+      const data = message as unknown as OnlineStartData;
+      session.localPlayer = data.playerIndex;
+      this.game.settings.player1Name = data.player1Name;
+      this.game.settings.player2Name = data.player2Name;
+      this.game.settings.opponentMode = 'human';
+      this.game.settings.mapSeed = data.seed;
+      Object.assign(this.game.settings, data.settings);
+      this.game.saveSettings();
+      this.startBattle('online');
+    });
+    session.on('error', (message) => {
+      status.textContent = String(message.message ?? '联机服务暂不可用。');
+      create.disabled = false;
+      join.disabled = false;
+    });
+    session.on('disconnected', () => {
+      if (this.onlineLobby.isConnected) status.textContent = '联机连接已断开。';
+    });
+    create.onclick = () => {
+      this.onlineHost = true;
+      status.textContent = '正在创建房间…';
+      create.disabled = true;
+      join.disabled = true;
+      session.create(this.game.settings.player1Name);
+    };
+    join.onclick = () => {
+      const code = this.onlineLobby.querySelector<HTMLInputElement>('#online-code')!.value.trim();
+      if (!/^[A-Z0-9]{5,8}$/i.test(code)) {
+        status.textContent = '请输入 5 至 8 位配对码。';
+        return;
+      }
+      status.textContent = '正在加入房间…';
+      create.disabled = true;
+      join.disabled = true;
+      session.join(code, this.game.settings.player2Name);
+    };
+    start.onclick = () => {
+      if (session.roomCode) {
+        const { mapPreset, turnTime, initialHealth, windStrength, movementFuel } = this.game.settings;
+        session.start(generateRandomSeed(), this.game.settings.player1Name, this.game.settings.player2Name, {
+          mapPreset, turnTime, initialHealth, windStrength, movementFuel,
+        });
+      }
+    };
+    this.onlineLobby.classList.remove('hidden');
+  }
+
+  private createOnlineLobby(): HTMLElement {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay hidden';
+    overlay.innerHTML = `
+      <div class="modal online-panel" role="dialog" aria-label="配对码联机">
+        <h2>配对码联机</h2>
+        <p>创建房间后把配对码发给好友；双方进入同一场回合制对战。</p>
+        <div id="online-room" class="online-room-code"></div>
+        <label class="online-code-label" for="online-code">好友配对码</label>
+        <input id="online-code" maxlength="8" autocomplete="off" autocapitalize="characters" placeholder="输入配对码">
+        <p id="online-status" class="online-status" aria-live="polite">选择创建房间或输入好友的配对码。</p>
+        <div class="modal-actions online-actions">
+          <button id="online-create" class="btn btn-primary">创建房间</button>
+          <button id="online-join" class="btn">加入房间</button>
+          <button id="online-start" class="btn" hidden>开始对战</button>
+          <button id="online-close" class="btn btn-ghost">关闭</button>
+        </div>
+      </div>`;
+    overlay.addEventListener('click', (event) => {
+      const target = event.target as HTMLElement;
+      if (target === overlay || target.closest('#online-close')) {
+        this.onlineSession?.close();
+        this.onlineSession = null;
+        this.game.onlineSession = null;
+        overlay.classList.add('hidden');
+      }
+    });
+    return overlay;
   }
 
   private createOverlay(inner: string): HTMLElement {

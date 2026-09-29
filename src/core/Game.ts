@@ -19,6 +19,7 @@ import { DamageSystem } from '../systems/DamageSystem';
 import { TerrainSystem } from '../systems/TerrainSystem';
 import { clampedPixelRatio } from '../utils/device';
 import type { MissionStats } from '../types';
+import type { OnlineSession } from '../net/OnlineSession';
 
 export class Game {
   canvas: HTMLCanvasElement;
@@ -41,6 +42,7 @@ export class Game {
   pauseScene?: PauseScene;
   resultScene?: ResultScene;
   menuScene?: MainMenuScene;
+  onlineSession: OnlineSession | null = null;
   private keyDownHandler?: (e: KeyboardEvent) => void;
   private keyUpHandler?: (e: KeyboardEvent) => void;
   private resizeHandler?: () => void;
@@ -97,6 +99,8 @@ export class Game {
     if (fromScene) {
       this.battle?.destroy();
       this.battle = undefined;
+      this.onlineSession?.close();
+      this.onlineSession = null;
     }
     const menu = new MainMenuScene(this);
     this.menuScene = menu;
@@ -123,6 +127,8 @@ export class Game {
 
   gotoResult(stats: MissionStats, seed: string): void {
     this.battle?.destroy();
+    this.onlineSession?.close();
+    this.onlineSession = null;
     const r = new ResultScene(this, stats, seed);
     this.resultScene = r;
     this.sceneMgr.change(r);

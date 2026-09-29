@@ -133,6 +133,15 @@
   flex-wrap: wrap;
 }
 .mm-primary-actions .btn-large { min-width: 220px; }
+.online-panel { max-width: 480px; }
+.online-panel h2 { margin: 0 0 10px; }
+.online-panel > p { color: var(--muted); line-height: 1.6; }
+.online-room-code { min-height: 28px; margin: 14px 0; color: var(--accent); font-size: 22px; font-weight: 800; letter-spacing: 4px; }
+.online-code-label { display: block; margin-bottom: 6px; color: var(--muted); font-size: 12px; }
+.online-panel input { width: 100%; padding: 12px; border: 1px solid var(--border); border-radius: 3px; background: rgba(0,0,0,.28); color: var(--fg); font: inherit; letter-spacing: 3px; text-transform: uppercase; }
+.online-status { min-height: 24px; margin-top: 12px; }
+.online-actions { flex-wrap: wrap; }
+.online-actions [hidden] { display: none; }
 .mm-hint {
   color: var(--muted);
   font-size: 12px;

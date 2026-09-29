@@ -1,10 +1,11 @@
 {
   "name": "tank-duel-2d",
   "version": "1.0.0",
-  "description": "本地双人回合制 2D 坦克炮战游戏（原创美术风格，离线 PWA）",
+  "description": "支持人机、本地双人和 EdgeOne Pages 配对联机的 2D 坦克炮战游戏",
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:edgeone": "edgeone pages dev",
     "build": "tsc -b && vite build",
     "train:ai": "node scripts/train-offline-ai.mjs",
     "train:ai:elite": "node scripts/train-elite-ai.mjs",

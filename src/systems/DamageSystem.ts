@@ -58,10 +58,10 @@ export class DamageSystem {
     tank.isGrounded = false;
   }
 
-  generateWind(strength: number): WindState {
+  generateWind(strength: number, random: () => number = Math.random): WindState {
     if (strength <= 0) return { value: 0, displayStrength: 0 };
-    const dir = Math.random() < 0.5 ? -1 : 1;
-    const mag = 0.4 + Math.random() * 0.6;
+    const dir = random() < 0.5 ? -1 : 1;
+    const mag = 0.4 + random() * 0.6;
     return {
       value: dir * mag * strength,
       displayStrength: strength,

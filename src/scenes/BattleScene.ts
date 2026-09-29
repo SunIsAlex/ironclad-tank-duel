@@ -6,7 +6,7 @@ import { ProjectileSystem } from '../systems/ProjectileSystem';
 import { Renderer } from '../rendering/Renderer';
 import { BattleHud } from '../ui/BattleHud';
 import { TouchControls } from '../ui/TouchControls';
-import { generateRandomSeed } from '../utils/random';
+import { createRng, generateRandomSeed } from '../utils/random';
 import { clamp, angleToVector, radToDeg } from '../utils/math';
 import { POWER_RANGE, ANGLE_RANGE, TANK_CONFIG, WORLD_CONFIG } from '../config/gameConfig';
 import { weaponRegistry } from '../weapons/WeaponRegistry';
@@ -31,6 +31,7 @@ import {
   resolveRoundByHealth,
 } from '../systems/MatchRules';
 import { createTrainingLoadout, isTrainingTarget, restoreTrainingTarget } from '../systems/TrainingSystem';
+import type { OnlineInput } from '../net/OnlineSession';
 
 interface PendingExplosion {
   x: number;
@@ -90,6 +91,14 @@ export class BattleScene implements Scene {
   private shopOpen = false;
   private shopPlayer = 0;
   private lastRoundWinner = -1;
+  private onlinePublishTimer = 0;
+  private onlineFireSequence = 0;
+  private onlineSwitchSequence = 0;
+  private onlineDetonateSequence = 0;
+  private onlineAppliedFire = 0;
+  private onlineAppliedSwitch = 0;
+  private onlineAppliedDetonate = 0;
+  private random: () => number = Math.random;
 
   constructor(game: Game, mode: GameMode = 'duel') {
     this.game = game;
@@ -98,6 +107,7 @@ export class BattleScene implements Scene {
     const settings = game.settings;
     this.nextHealth = [settings.initialHealth, settings.initialHealth];
     this.seed = settings.mapSeed && settings.mapSeed.length > 0 ? settings.mapSeed : generateRandomSeed();
+    this.random = mode === 'online' ? createRng(this.seed).next : Math.random;
     game.settings.mapSeed = this.seed;
     game.saveSettings();
 
@@ -116,6 +126,7 @@ export class BattleScene implements Scene {
 
     this.wind = { value: 0, displayStrength: 0 };
     this.turn = new TurnManager(this.tanks, game.damageSystem);
+    this.turn.random = this.random;
     this.turn.fixedPlayer = mode === 'training' ? 0 : null;
     this.turn.turnFuel = fuel;
     this.turn.windStrength = settings.windStrength;
@@ -127,7 +138,7 @@ export class BattleScene implements Scene {
     game.camera.followTank(this.tanks[0].x, this.tanks[0].y);
     game.camera.y = game.camera.targetY;
 
-    this.projectileSystem = new ProjectileSystem(game.terrain, game.collision, this.tanks, this.wind);
+    this.projectileSystem = new ProjectileSystem(game.terrain, game.collision, this.tanks, this.wind, this.random);
     this.projectileSystem.setWind(this.wind);
 
     const parent = game.canvas.parentElement!;
@@ -142,7 +153,8 @@ export class BattleScene implements Scene {
       this.applyTrainingRules();
     } else {
       this.applyInventoriesToTanks();
-      this.openShop(-1);
+      if (mode === 'online') this.shopOpen = false;
+      else this.openShop(-1);
     }
 
   }
@@ -153,10 +165,10 @@ export class BattleScene implements Scene {
     // 大地图上扩大出生区间；从多个候选点中挑选相对稳定的落脚处，避免
     // 多样地形把坦克直接生成在尖峰侧面。
     const findSpawn = (minRatio: number, maxRatio: number): number => {
-      let bestX = Math.floor(w * (minRatio + Math.random() * (maxRatio - minRatio)));
+      let bestX = Math.floor(w * (minRatio + this.random() * (maxRatio - minRatio)));
       let bestSlope = Number.POSITIVE_INFINITY;
       for (let i = 0; i < 24; i++) {
-        const x = Math.floor(w * (minRatio + Math.random() * (maxRatio - minRatio)));
+        const x = Math.floor(w * (minRatio + this.random() * (maxRatio - minRatio)));
         const slope = Math.abs(terrain.surfaceY(x + 18) - terrain.surfaceY(x - 18)) / 36;
         if (slope < bestSlope) {
           bestX = x;
@@ -234,7 +246,7 @@ export class BattleScene implements Scene {
           this.chestRound = this.turn.roundCount;
         }
         if (this.mode !== 'training' && this.wormholeRound !== this.turn.roundCount) {
-          const appeared = this.projectileSystem.spawnWormholesForTurn(0.3);
+          const appeared = this.projectileSystem.spawnWormholesForTurn(0.3, this.random);
           this.wormholeRound = this.turn.roundCount;
           if (appeared) this.turnHint = { text: '空间异常：双向黑洞出现！', life: 1.8 };
         }
@@ -348,6 +360,11 @@ export class BattleScene implements Scene {
     // 防御性修正：若地形结算的最后一帧恰好把坦克水平推到空洞上方，
     // 控制阶段继续完成落地，避免坦克永久悬空。
     if (this.settleTankAtCurrentPosition(tank, dt)) return;
+    const online = this.game.onlineSession;
+    if (this.mode === 'online' && online && this.turn.currentPlayer !== online.localPlayer) {
+      this.handleRemotePlayerControl(dt, tank);
+      return;
+    }
     // 镜头跟随当前坦克
     this.game.camera.followTank(tank.x, tank.y);
 
@@ -365,6 +382,7 @@ export class BattleScene implements Scene {
     // 键盘
     const input = this.game.input;
     if (input.isDown('escape') || pauseRequested) {
+      if (this.mode === 'online') return;
       this.paused = true;
       this.game.gotoPause();
       return;
@@ -380,6 +398,7 @@ export class BattleScene implements Scene {
     this.weaponCyclePressed = tabNow;
 
     if (weaponSwitchRequested) {
+      if (this.mode === 'online') this.onlineSwitchSequence++;
       cycleWeapon(tank, 1);
       // 跳过无弹药武器
       let safety = weaponRegistry.all().length;
@@ -420,10 +439,52 @@ export class BattleScene implements Scene {
     // 发射
     const spaceNow = input.isDown(' ');
     const fireHeld = spaceNow || this.game.mobile.isActionDown('fire');
-    if (fireRequested || (fireHeld && !this.firePressed)) {
+    const fireTriggered = fireRequested || (fireHeld && !this.firePressed);
+    const fireSequence = this.onlineFireSequence;
+    if (fireTriggered) {
       this.fire(tank);
     }
     this.firePressed = fireHeld;
+    this.publishOnlineInput(tank, moveDir, fireSequence !== this.onlineFireSequence || weaponSwitchRequested);
+  }
+
+  private handleRemotePlayerControl(dt: number, tank: Tank): void {
+    const session = this.game.onlineSession;
+    if (!session) return;
+    const input = session.remoteInput;
+    const connected = performance.now() - session.remoteInputAt < 1200;
+    this.game.camera.followTank(tank.x, tank.y);
+    const move = connected ? input.move : 0;
+    tank.turretAngle = input.angle;
+    tank.power = input.power;
+    if (move !== 0) this.turn.moveTank(tank, move > 0 ? 1 : -1, TANK_CONFIG.moveSpeed * dt, this.game.terrain);
+    if (connected && input.switchWeapon !== this.onlineAppliedSwitch) {
+      this.onlineAppliedSwitch = input.switchWeapon;
+      cycleWeapon(tank, 1);
+      let safety = weaponRegistry.all().length;
+      while (!hasAmmo(tank, tank.selectedWeaponId) && safety-- > 0) cycleWeapon(tank, 1);
+    }
+    if (connected && input.fire !== this.onlineAppliedFire) {
+      this.onlineAppliedFire = input.fire;
+      this.fire(tank);
+    }
+  }
+
+  private publishOnlineInput(tank: Tank, moveDir: number, force = false): void {
+    const session = this.game.onlineSession;
+    if (!session || this.mode !== 'online') return;
+    this.onlinePublishTimer -= 1 / 60;
+    if (this.onlinePublishTimer > 0 && !force) return;
+    this.onlinePublishTimer = 0.05;
+    const move = moveDir < 0 ? -1 : moveDir > 0 ? 1 : 0;
+    session.sendInput({
+      move: move as OnlineInput['move'],
+      angle: tank.turretAngle,
+      power: tank.power,
+      fire: this.onlineFireSequence,
+      switchWeapon: this.onlineSwitchSequence,
+      detonate: this.onlineDetonateSequence,
+    });
   }
 
   private isAITurn(): boolean {
@@ -499,6 +560,9 @@ export class BattleScene implements Scene {
       audioSystem.tankHit();
       return;
     }
+    if (this.mode === 'online' && this.game.onlineSession?.localPlayer === this.turn.currentPlayer) {
+      this.onlineFireSequence++;
+    }
     const weapon = weaponRegistry.get(tank.selectedWeaponId);
     consumeAmmo(tank, tank.selectedWeaponId);
     // 计算炮口位置和初速度
@@ -527,6 +591,16 @@ export class BattleScene implements Scene {
       return;
     }
 
+    const session = this.game.onlineSession;
+    if (this.mode === 'online' && session && this.turn.currentPlayer !== session.localPlayer) {
+      const input = session.remoteInput;
+      if (performance.now() - session.remoteInputAt < 1200 && input.detonate !== this.onlineAppliedDetonate) {
+        this.onlineAppliedDetonate = input.detonate;
+        if (this.projectileSystem.detonateCluster(owner.id)) this.turnHint = { text: '集束子弹释放！', life: 1 };
+      }
+      return;
+    }
+
     const actions = this.game.mobile.consumeOneShots();
     const pauseRequested = actions.includes('pause');
     if (this.game.input.isDown('escape') || pauseRequested) {
@@ -538,6 +612,8 @@ export class BattleScene implements Scene {
     const detonateRequested = actions.includes('fire') || (spaceNow && !this.firePressed);
     this.firePressed = spaceNow;
     if (detonateRequested && this.projectileSystem.detonateCluster(owner.id)) {
+      if (this.mode === 'online') this.onlineDetonateSequence++;
+      if (this.mode === 'online') this.publishOnlineInput(owner, 0, true);
       this.turnHint = { text: '集束子弹释放！', life: 1 };
       audioSystem.fire();
     }
@@ -826,6 +902,10 @@ export class BattleScene implements Scene {
       awardRoundCredits(this.credits[0], previousWinner === 0),
       awardRoundCredits(this.credits[1], previousWinner === 1),
     ];
+    if (this.mode === 'online') {
+      this.shopOpen = false;
+      return;
+    }
     this.shopOpen = true;
     this.shopPlayer = 0;
     this.showCurrentShop();
@@ -1084,11 +1164,13 @@ export class BattleScene implements Scene {
   handleKeyDown(e: KeyboardEvent): boolean {
     if (isFormElement(e.target)) return false;
     if (e.key === 'Escape') {
+      if (this.mode === 'online') return true;
       this.paused = true;
       this.game.gotoPause();
       return true;
     }
     if (e.key.toLowerCase() === 'r' && this.turn.phase === 'GAME_OVER') {
+      if (this.mode === 'online') return true;
       this.game.gotoBattle(this.mode);
     }
     return false;

@@ -14,6 +14,7 @@ export class TurnManager {
   windStrength = 2;
   turnTimeLimit = 0;
   fixedPlayer: number | null = null;
+  random: () => number = Math.random;
   private turnStartTime = 0;
   private damageSystem: DamageSystem;
 
@@ -29,7 +30,7 @@ export class TurnManager {
     this.currentPlayer = 0;
     this.turnTimer = 0;
     this.phaseTimer = 0;
-    this.wind = this.damageSystem.generateWind(this.windStrength);
+    this.wind = this.damageSystem.generateWind(this.windStrength, this.random);
   }
 
   startGame(startingPlayer = 0): void {
@@ -51,7 +52,7 @@ export class TurnManager {
     this.phase = 'TURN_START';
     this.phaseTimer = 0.6;
     this.resetCurrentTankFuel(this.turnFuel);
-    this.wind = this.damageSystem.generateWind(this.windStrength);
+    this.wind = this.damageSystem.generateWind(this.windStrength, this.random);
   }
 
   enterPlayerControl(): void {

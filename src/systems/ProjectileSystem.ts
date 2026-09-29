@@ -39,13 +39,17 @@ export class ProjectileSystem {
   private rewardsQueue: TreasureRewardEvent[] = [];
   private wormholes: WormholePair | null = null;
   private wormholeEvents: WormholeTravelEvent[] = [];
+  private random: () => number = Math.random;
 
   constructor(
     private terrain: TerrainSystem,
     private collision: CollisionSystem,
     private tanks: Tank[],
-    private wind: WindState
-  ) {}
+    private wind: WindState,
+    random: () => number = Math.random
+  ) {
+    this.random = random;
+  }
 
   reset(tanks: Tank[], wind: WindState): void {
     this.next = [];
@@ -197,8 +201,8 @@ export class ProjectileSystem {
     // 基本可玩性。失败时保留中线低位安全点，不会回到地图高空。
     if (targetsReachable && aliveTanks.length >= 2) {
       for (let attempt = 0; attempt < 24; attempt++) {
-        const candidateX = minX + Math.random() * Math.max(0, maxX - minX);
-        const candidateY = safeMinY + Math.random() * Math.max(0, safeMaxY - safeMinY);
+        const candidateX = minX + this.random() * Math.max(0, maxX - minX);
+        const candidateY = safeMinY + this.random() * Math.max(0, safeMaxY - safeMinY);
         if (
           this.canHitPoint(leftTank, candidateX, candidateY) &&
           this.canHitPoint(rightTank, candidateX, candidateY)
@@ -213,7 +217,7 @@ export class ProjectileSystem {
       x: chestX,
       y: chestY,
       radius: 18,
-      phase: Math.random() * Math.PI * 2,
+      phase: this.random() * Math.PI * 2,
       active: true,
       // 生成时即确定奖励，便于渲染器在宝箱上方预告 buff。
       reward: this.randomReward(),
@@ -642,7 +646,7 @@ export class ProjectileSystem {
 
   private randomReward(): TreasureReward {
     const rewards: TreasureReward[] = ['double_damage', 'wide_blast', 'split_shot'];
-    return rewards[Math.floor(Math.random() * rewards.length)];
+    return rewards[Math.floor(this.random() * rewards.length)];
   }
 
   private splitFromChest(p: Projectile, x: number, y: number): void {
@@ -808,7 +812,7 @@ export class ProjectileSystem {
           p.x + offset,
           p.y,
           offset * 0.6,
-          childSpeed * (0.8 + Math.random() * 0.4),
+          childSpeed * (0.8 + this.random() * 0.4),
           false
         );
         proj.damage = weapon.maxDamage;
