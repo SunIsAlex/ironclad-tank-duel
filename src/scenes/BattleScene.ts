@@ -33,6 +33,9 @@ import {
 import { createTrainingLoadout, isTrainingTarget, restoreTrainingTarget } from '../systems/TrainingSystem';
 import type { OnlineInput } from '../net/OnlineSession';
 
+/** 集束弹已不可控制时上报的弹道进度，表示对手无需再等待。 */
+const ONLINE_FLIGHT_DONE = 1e9;
+
 interface PendingExplosion {
   x: number;
   y: number;
@@ -92,12 +95,18 @@ export class BattleScene implements Scene {
   private shopPlayer = 0;
   private lastRoundWinner = -1;
   private onlinePublishTimer = 0;
+  private onlineLastPublished = '';
+  /** 本方最后一次上报的坦克状态；开火后冻结，弹道同步消息沿用这一快照。 */
+  private onlineSnapshot: Omit<OnlineInput, 'fire' | 'pass' | 'flightTick' | 'detonateAt'> | null = null;
   private onlineFireSequence = 0;
-  private onlineSwitchSequence = 0;
-  private onlineDetonateSequence = 0;
+  private onlinePassSequence = 0;
   private onlineAppliedFire = 0;
-  private onlineAppliedSwitch = 0;
-  private onlineAppliedDetonate = 0;
+  private onlineAppliedPass = 0;
+  /** 当前炮弹已完成的弹道步数（双方独立计数，按固定步长保持一致） */
+  private onlineFlightTick = 0;
+  private onlineDetonateAt = 0;
+  private onlineClusterTracked = false;
+  private onlineEndTimer = -1;
   private random: () => number = Math.random;
 
   constructor(game: Game, mode: GameMode = 'duel') {
@@ -227,7 +236,19 @@ export class BattleScene implements Scene {
       return;
     }
 
+    if (this.mode === 'online' && this.handleOnlineEnded(dt)) return;
+
+    // 联机时回合超时只由操作方判定，再通过 pass 序号通知对手；
+    // 否则网络延迟会让双方在不同时刻结束同一回合。
+    const remoteTurn = this.isRemoteTurn();
+    const wasLocalControl = this.mode === 'online' && !remoteTurn && this.turn.phase === 'PLAYER_CONTROL';
+    this.turn.timeoutEnabled = !remoteTurn;
     this.turn.updateTimers(dt);
+    if (wasLocalControl && this.turn.phase === 'TURN_END') {
+      this.onlinePassSequence++;
+      const tank = this.tanks[this.turn.currentPlayer];
+      if (tank) this.publishOnlineInput(tank, 0, true);
+    }
     // TurnManager 在 TURN_START 随机生成新风；每帧同步到弹道系统，
     // 确保新回合的风不会沿用上一回合。
     this.wind = this.turn.wind;
@@ -263,8 +284,11 @@ export class BattleScene implements Scene {
         else this.handlePlayerControl(dt);
         break;
       case 'PROJECTILE_FLYING':
-        this.handleClusterDetonation();
+        // 联机对手的集束弹尚未确认本步是否释放时暂停弹道，等待操作方进度。
+        if (!this.handleClusterDetonation()) break;
         this.projectileSystem.update(dt);
+        this.onlineFlightTick++;
+        this.publishOnlineFlight();
         for (const event of this.projectileSystem.consumeWormholeEvents()) {
           this.game.particles.spawnExplosion(event.entryX, event.entryY, 24, event.color);
           this.game.particles.spawnExplosion(event.exitX, event.exitY, 30, event.color);
@@ -360,8 +384,7 @@ export class BattleScene implements Scene {
     // 防御性修正：若地形结算的最后一帧恰好把坦克水平推到空洞上方，
     // 控制阶段继续完成落地，避免坦克永久悬空。
     if (this.settleTankAtCurrentPosition(tank, dt)) return;
-    const online = this.game.onlineSession;
-    if (this.mode === 'online' && online && this.turn.currentPlayer !== online.localPlayer) {
+    if (this.isRemoteTurn()) {
       this.handleRemotePlayerControl(dt, tank);
       return;
     }
@@ -381,8 +404,8 @@ export class BattleScene implements Scene {
 
     // 键盘
     const input = this.game.input;
-    if (input.isDown('escape') || pauseRequested) {
-      if (this.mode === 'online') return;
+    // 联机对局无法暂停对手，忽略暂停请求但保持其余操作可用。
+    if ((input.isDown('escape') || pauseRequested) && this.mode !== 'online') {
       this.paused = true;
       this.game.gotoPause();
       return;
@@ -398,7 +421,6 @@ export class BattleScene implements Scene {
     this.weaponCyclePressed = tabNow;
 
     if (weaponSwitchRequested) {
-      if (this.mode === 'online') this.onlineSwitchSequence++;
       cycleWeapon(tank, 1);
       // 跳过无弹药武器
       let safety = weaponRegistry.all().length;
@@ -440,51 +462,148 @@ export class BattleScene implements Scene {
     const spaceNow = input.isDown(' ');
     const fireHeld = spaceNow || this.game.mobile.isActionDown('fire');
     const fireTriggered = fireRequested || (fireHeld && !this.firePressed);
-    const fireSequence = this.onlineFireSequence;
     if (fireTriggered) {
       this.fire(tank);
     }
     this.firePressed = fireHeld;
-    this.publishOnlineInput(tank, moveDir, fireSequence !== this.onlineFireSequence || weaponSwitchRequested);
+    // 开火时 fire() 已按开火前的状态上报；此后不能再用开火后的坦克状态覆盖快照。
+    if (this.turn.phase === 'PLAYER_CONTROL') this.publishOnlineInput(tank, moveDir);
+  }
+
+  private isRemoteTurn(): boolean {
+    const session = this.game.onlineSession;
+    return this.mode === 'online' && !!session && this.turn.currentPlayer !== session.localPlayer;
+  }
+
+  /** 局数与回合数组成的回合标识，双方按相同规则推进，可用来识别过期消息。 */
+  private onlineTurnId(): number {
+    return this.gamesPlayed * 100 + this.turn.roundCount;
   }
 
   private handleRemotePlayerControl(dt: number, tank: Tank): void {
     const session = this.game.onlineSession;
     if (!session) return;
-    const input = session.remoteInput;
-    const connected = performance.now() - session.remoteInputAt < 1200;
     this.game.camera.followTank(tank.x, tank.y);
-    const move = connected ? input.move : 0;
+    const input = session.remoteInput;
+    if (!input) return;
+    // 开火与放弃回合使用递增序号，不受消息延迟或合并影响；即使本端仍在
+    // 结算上一回合，序号变化也会保留到进入本回合操作阶段后再执行。
+    if (input.pass !== this.onlineAppliedPass) {
+      this.onlineAppliedPass = input.pass;
+      this.applyRemoteTankState(tank, input);
+      this.turn.enterTurnEnd();
+      return;
+    }
+    if (input.fire !== this.onlineAppliedFire) {
+      this.onlineAppliedFire = input.fire;
+      this.applyRemoteTankState(tank, input);
+      this.fire(tank);
+      return;
+    }
+    if (input.turn !== this.onlineTurnId()) return;
+    // 操作阶段仅做平滑跟随展示；开火时再精确对齐操作方的状态。
     tank.turretAngle = input.angle;
     tank.power = input.power;
-    if (move !== 0) this.turn.moveTank(tank, move > 0 ? 1 : -1, TANK_CONFIG.moveSpeed * dt, this.game.terrain);
-    if (connected && input.switchWeapon !== this.onlineAppliedSwitch) {
-      this.onlineAppliedSwitch = input.switchWeapon;
-      cycleWeapon(tank, 1);
-      let safety = weaponRegistry.all().length;
-      while (!hasAmmo(tank, tank.selectedWeaponId) && safety-- > 0) cycleWeapon(tank, 1);
+    if (hasAmmo(tank, input.weaponId)) tank.selectedWeaponId = input.weaponId;
+    const gap = input.x - tank.x;
+    if (Math.abs(gap) > 0.5) {
+      const step = Math.min(Math.abs(gap), TANK_CONFIG.moveSpeed * 1.5 * dt);
+      tank.x += Math.sign(gap) * step;
+      const pose = this.game.terrain.tankPose(tank.x, tank.y, TANK_CONFIG.bodyWidth);
+      tank.y = pose.y;
+      tank.bodyAngle = pose.angle;
+      tank.isGrounded = pose.supported;
     }
-    if (connected && input.fire !== this.onlineAppliedFire) {
-      this.onlineAppliedFire = input.fire;
-      this.fire(tank);
+    tank.movementFuel = input.fuel;
+  }
+
+  /** 采用操作方上报的权威坦克状态，保证双方弹道起点、血量和武器一致。 */
+  private applyRemoteTankState(tank: Tank, input: OnlineInput): void {
+    tank.x = input.x;
+    tank.y = input.y;
+    tank.turretAngle = input.angle;
+    tank.power = input.power;
+    tank.movementFuel = input.fuel;
+    tank.velocityX = 0;
+    tank.velocityY = 0;
+    const pose = this.game.terrain.tankPose(tank.x, tank.y, TANK_CONFIG.bodyWidth);
+    tank.bodyAngle = pose.angle;
+    tank.isGrounded = pose.supported;
+    if (hasAmmo(tank, input.weaponId)) tank.selectedWeaponId = input.weaponId;
+    tank.health = Math.min(tank.maxHealth, input.health);
+    if (tank.health <= 0) {
+      tank.health = 0;
+      tank.isAlive = false;
     }
   }
 
-  private publishOnlineInput(tank: Tank, moveDir: number, force = false): void {
+  private publishOnlineInput(tank: Tank | null, moveDir = 0, force = false): void {
     const session = this.game.onlineSession;
     if (!session || this.mode !== 'online') return;
     this.onlinePublishTimer -= 1 / 60;
+    if (tank) {
+      this.onlineSnapshot = {
+        turn: this.onlineTurnId(),
+        move: (moveDir < 0 ? -1 : moveDir > 0 ? 1 : 0) as OnlineInput['move'],
+        x: tank.x,
+        y: tank.y,
+        angle: tank.turretAngle,
+        power: tank.power,
+        health: tank.health,
+        fuel: tank.movementFuel,
+        weaponId: tank.selectedWeaponId,
+      };
+    }
+    if (!this.onlineSnapshot) return;
+    const input: OnlineInput = {
+      ...this.onlineSnapshot,
+      fire: this.onlineFireSequence,
+      pass: this.onlinePassSequence,
+      flightTick: this.onlineFlightTick,
+      detonateAt: this.onlineDetonateAt,
+    };
+    // 仅在状态变化时发送（最多每 0.1 秒一次），减少房间存储写入。
+    const serialized = JSON.stringify(input);
+    if (serialized === this.onlineLastPublished) return;
     if (this.onlinePublishTimer > 0 && !force) return;
     this.onlinePublishTimer = 0.1;
-    const move = moveDir < 0 ? -1 : moveDir > 0 ? 1 : 0;
-    session.sendInput({
-      move: move as OnlineInput['move'],
-      angle: tank.turretAngle,
-      power: tank.power,
-      fire: this.onlineFireSequence,
-      switchWeapon: this.onlineSwitchSequence,
-      detonate: this.onlineDetonateSequence,
-    });
+    this.onlineLastPublished = serialized;
+    session.sendInput(input);
+  }
+
+  /**
+   * 本方集束弹飞行期间持续上报弹道进度，对手据此逐步推进并在同一步释放；
+   * 集束弹不可再控制后上报一个极大值，让对手不再等待。
+   */
+  private publishOnlineFlight(): void {
+    if (this.mode !== 'online' || this.isRemoteTurn()) return;
+    const owner = this.tanks[this.turn.currentPlayer];
+    if (!owner) return;
+    if (this.projectileSystem.hasControllableCluster(owner.id)) {
+      this.onlineClusterTracked = true;
+      this.publishOnlineInput(null);
+    } else if (this.onlineClusterTracked) {
+      this.onlineClusterTracked = false;
+      this.onlineFlightTick = ONLINE_FLIGHT_DONE;
+      this.publishOnlineInput(null, 0, true);
+    }
+  }
+
+  /** 对手离开或房间失效时提示并返回主菜单；返回 true 表示暂停战斗逻辑。 */
+  private handleOnlineEnded(dt: number): boolean {
+    const session = this.game.onlineSession;
+    if (this.matchComplete) return false;
+    if (this.onlineEndTimer < 0) {
+      if (!session || !session.ended) return false;
+      this.onlineEndTimer = 3;
+      this.turnHint = {
+        text: session.opponentLeft ? '对手已离开对局，即将返回主菜单' : '联机连接已失效，即将返回主菜单',
+        life: 3,
+      };
+    }
+    this.onlineEndTimer -= dt;
+    if (this.onlineEndTimer <= 0) this.game.gotoMenu();
+    return true;
   }
 
   private isAITurn(): boolean {
@@ -560,8 +679,13 @@ export class BattleScene implements Scene {
       audioSystem.tankHit();
       return;
     }
-    if (this.mode === 'online' && this.game.onlineSession?.localPlayer === this.turn.currentPlayer) {
+    this.onlineFlightTick = 0;
+    this.onlineDetonateAt = 0;
+    this.onlineClusterTracked = false;
+    if (this.mode === 'online' && !this.isRemoteTurn()) {
+      // 必须在扣除弹药前上报：弹药耗尽时会自动换回基础炮弹。
       this.onlineFireSequence++;
+      this.publishOnlineInput(tank, 0, true);
     }
     const weapon = weaponRegistry.get(tank.selectedWeaponId);
     consumeAmmo(tank, tank.selectedWeaponId);
@@ -575,9 +699,10 @@ export class BattleScene implements Scene {
     this.turn.enterProjectileFlying();
   }
 
-  private handleClusterDetonation(): void {
+  /** 返回 false 表示本步需等待联机对手的弹道进度，暂不推进炮弹。 */
+  private handleClusterDetonation(): boolean {
     const owner = this.tanks[this.turn.currentPlayer];
-    if (!owner) return;
+    if (!owner) return true;
     if (this.isAITurn()) {
       const target = this.tanks.find((tank) => tank.isAlive && tank.id !== owner.id);
       if (
@@ -588,35 +713,43 @@ export class BattleScene implements Scene {
           this.turnHint = { text: `${owner.name}（AI）释放集束子弹！`, life: 1.1 };
         }
       }
-      return;
+      return true;
     }
 
-    const session = this.game.onlineSession;
-    if (this.mode === 'online' && session && this.turn.currentPlayer !== session.localPlayer) {
-      const input = session.remoteInput;
-      if (performance.now() - session.remoteInputAt < 1200 && input.detonate !== this.onlineAppliedDetonate) {
-        this.onlineAppliedDetonate = input.detonate;
-        if (this.projectileSystem.detonateCluster(owner.id)) this.turnHint = { text: '集束子弹释放！', life: 1 };
+    if (this.isRemoteTurn()) {
+      if (!this.projectileSystem.hasControllableCluster(owner.id)) return true;
+      const input = this.game.onlineSession?.remoteInput;
+      if (!input || input.fire !== this.onlineAppliedFire) return false;
+      if (input.detonateAt > 0 && this.onlineFlightTick >= input.detonateAt - 1) {
+        if (this.projectileSystem.detonateCluster(owner.id)) {
+          this.turnHint = { text: '集束子弹释放！', life: 1 };
+          audioSystem.fire();
+        }
+        return true;
       }
-      return;
+      // 操作方已越过这一步且未释放，才可以继续推进。
+      return input.flightTick > this.onlineFlightTick;
     }
 
     const actions = this.game.mobile.consumeOneShots();
     const pauseRequested = actions.includes('pause');
-    if (this.game.input.isDown('escape') || pauseRequested) {
+    if ((this.game.input.isDown('escape') || pauseRequested) && this.mode !== 'online') {
       this.paused = true;
       this.game.gotoPause();
-      return;
+      return true;
     }
     const spaceNow = this.game.input.isDown(' ');
     const detonateRequested = actions.includes('fire') || (spaceNow && !this.firePressed);
     this.firePressed = spaceNow;
     if (detonateRequested && this.projectileSystem.detonateCluster(owner.id)) {
-      if (this.mode === 'online') this.onlineDetonateSequence++;
-      if (this.mode === 'online') this.publishOnlineInput(owner, 0, true);
+      if (this.mode === 'online') {
+        this.onlineDetonateAt = this.onlineFlightTick + 1;
+        this.publishOnlineInput(null, 0, true);
+      }
       this.turnHint = { text: '集束子弹释放！', life: 1 };
       audioSystem.fire();
     }
+    return true;
   }
 
   private consumeExplosions(): void {
@@ -1179,13 +1312,13 @@ export class BattleScene implements Scene {
     return false;
   }
   handlePointerDown(x: number, y: number, id: number): boolean {
-    if (this.turn.phase !== 'PLAYER_CONTROL' || this.isAITurn()) return false;
+    if (this.turn.phase !== 'PLAYER_CONTROL' || this.isAITurn() || this.isRemoteTurn()) return false;
     this.aimPointerId = id;
     this.updateMouseAim(x, y);
     return true;
   }
   handlePointerMove(x: number, y: number, id: number): boolean {
-    if (this.turn.phase !== 'PLAYER_CONTROL' || this.isAITurn()) return false;
+    if (this.turn.phase !== 'PLAYER_CONTROL' || this.isAITurn() || this.isRemoteTurn()) return false;
     if (this.aimPointerId !== null && this.aimPointerId !== id) return false;
     this.updateMouseAim(x, y);
     return true;
@@ -1196,7 +1329,7 @@ export class BattleScene implements Scene {
     return true;
   }
   handleWheel(e: WheelEvent): boolean {
-    if (this.turn.phase !== 'PLAYER_CONTROL' || this.isAITurn()) return false;
+    if (this.turn.phase !== 'PLAYER_CONTROL' || this.isAITurn() || this.isRemoteTurn()) return false;
     const tank = this.tanks[this.turn.currentPlayer];
     if (!tank?.isAlive) return false;
     const unit = e.deltaMode === WheelEvent.DOM_DELTA_LINE

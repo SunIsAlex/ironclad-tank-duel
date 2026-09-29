@@ -23,14 +23,24 @@ function cleanName(value, fallback) {
   return String(value || fallback).trim().slice(0, 16) || fallback;
 }
 
+// 0 是合法取值（无风、无燃料、无限时），不能用 `|| 默认值` 覆盖。
+function clampInt(value, min, max, fallback) {
+  const number = Math.trunc(Number(value));
+  return Number.isFinite(number) ? Math.max(min, Math.min(max, number)) : fallback;
+}
+
 function cleanSettings(settings = {}) {
   return {
     mapPreset: String(settings.mapPreset || 'generated').slice(0, 24),
-    turnTime: Math.max(0, Math.min(60, Math.trunc(Number(settings.turnTime) || 0))),
-    initialHealth: Math.max(50, Math.min(300, Math.trunc(Number(settings.initialHealth) || 100))),
-    windStrength: Math.max(0, Math.min(3, Math.trunc(Number(settings.windStrength) || 2))),
-    movementFuel: Math.max(0, Math.min(600, Math.trunc(Number(settings.movementFuel) || 220))),
+    turnTime: clampInt(settings.turnTime, 0, 60, 0),
+    initialHealth: clampInt(settings.initialHealth, 50, 300, 100),
+    windStrength: clampInt(settings.windStrength, 0, 3, 2),
+    movementFuel: clampInt(settings.movementFuel, 0, 600, 220),
   };
+}
+
+function counter(value) {
+  return Math.max(0, Math.min(1e9, Math.trunc(Number(value) || 0)));
 }
 
 function appendEvent(room, message, target = null) {
@@ -73,12 +83,11 @@ async function handlePost(request, store) {
         createdAt: now,
         updatedAt: now,
       };
-      try {
-        await store.setJSON(`rooms/${code}`, room, { onlyIfNew: true });
-        return json({ type: 'created', code, playerIndex: 0, token, cursor: 0 });
-      } catch (error) {
-        if (error?.name !== 'PreconditionFailedError') throw error;
-      }
+      // Pages Blob 不强制 onlyIfNew，需先确认配对码未被占用。
+      const existing = await getRoom(store, code);
+      if (existing && now - existing.updatedAt <= roomLifetime) continue;
+      await store.setJSON(`rooms/${code}`, room);
+      return json({ type: 'created', code, playerIndex: 0, token, cursor: 0 });
     }
     return json({ error: '暂时无法创建房间，请重试。' }, 503);
   }
@@ -110,7 +119,16 @@ async function handlePost(request, store) {
   }
 
   if (message.type === 'close') {
-    await store.delete(`rooms/${code}`);
+    const opponent = 1 - playerIndex;
+    // 对手仍在房间时先通知其离开；双方都离开或无人加入时才删除房间。
+    if (room.players[opponent] && !room.left?.includes(opponent)) {
+      room.left = [...(room.left ?? []), playerIndex];
+      room.status = 'closed';
+      appendEvent(room, { type: 'left', playerIndex }, opponent);
+      await store.setJSON(`rooms/${code}`, room);
+    } else {
+      await store.delete(`rooms/${code}`);
+    }
     return json({ ok: true });
   }
 
@@ -132,18 +150,26 @@ async function handlePost(request, store) {
   } else if (message.type === 'input') {
     if (room.status !== 'playing') return json({ error: '对局尚未开始。' }, 409);
     const input = message.input;
-    if (!input || !Number.isFinite(input.angle) || !Number.isFinite(input.power)) {
+    const numbers = ['x', 'y', 'angle', 'power', 'health', 'fuel'];
+    if (!input || numbers.some((key) => !Number.isFinite(input[key]))) {
       return json({ error: '输入数据无效。' }, 400);
     }
     appendEvent(room, {
       type: 'input',
       input: {
-        move: Math.max(-1, Math.min(1, Math.trunc(input.move))),
+        turn: counter(input.turn),
+        move: Math.max(-1, Math.min(1, Math.trunc(Number(input.move) || 0))),
+        x: input.x,
+        y: input.y,
         angle: Math.max(0, Math.min(180, input.angle)),
-        power: Math.max(150, Math.min(1100, input.power)),
-        fire: Math.max(0, Math.trunc(input.fire)),
-        switchWeapon: Math.max(0, Math.trunc(input.switchWeapon)),
-        detonate: Math.max(0, Math.trunc(input.detonate)),
+        power: Math.max(0, Math.min(2000, input.power)),
+        health: Math.max(0, input.health),
+        fuel: Math.max(0, input.fuel),
+        weaponId: String(input.weaponId || 'basic_shell').replace(/[^a-z0-9_]/gi, '').slice(0, 32),
+        fire: counter(input.fire),
+        pass: counter(input.pass),
+        flightTick: counter(input.flightTick),
+        detonateAt: counter(input.detonateAt),
       },
     }, 1 - playerIndex);
   } else {

@@ -116,6 +116,12 @@ export class MainMenuScene implements Scene {
       create.disabled = false;
       join.disabled = false;
     });
+    session.on('left', () => {
+      if (!this.onlineLobby.isConnected || this.onlineSession !== session) return;
+      // 旧房间已结束（关闭时由服务端删除），换一个新会话以便重新建房。
+      this.showOnlineLobby();
+      status.textContent = '对手已离开房间，请重新创建或加入。';
+    });
     session.on('disconnected', () => {
       if (this.onlineLobby.isConnected) status.textContent = '联机连接已断开。';
     });

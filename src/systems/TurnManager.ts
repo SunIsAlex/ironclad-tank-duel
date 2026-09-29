@@ -101,11 +101,13 @@ export class TurnManager {
   }
 
   turnFuel = 220;
+  /** 为 false 时计时归零也不自动结束回合（联机时由对手端决定超时）。 */
+  timeoutEnabled = true;
 
   updateTimers(dt: number): void {
     if (this.phase === 'PLAYER_CONTROL' && this.turnTimeLimit > 0) {
-      this.turnTimer -= dt;
-      if (this.turnTimer <= 0) {
+      this.turnTimer = Math.max(0, this.turnTimer - dt);
+      if (this.turnTimer <= 0 && this.timeoutEnabled) {
         // 超时自动跳过 -> 视为结束回合但不发射
         this.enterTurnEnd();
       }
