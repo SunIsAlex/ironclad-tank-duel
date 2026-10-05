@@ -220,7 +220,9 @@ export class TurnManager {
       // 屏幕坐标系 y 向下：dy < 0 才是需要动力攀爬的上坡。
       // 向下进入弹坑时即便坑壁很陡也必须允许前进，随后由落地阶段
       // 处理支撑与坠落；若对 dy 取绝对值，弹坑边缘会变成无形墙。
-      const climbSlope = Math.max(0, -dy / Math.max(0.5, Math.abs(dx)));
+      // 高度图按整像素量化：每帧步长常小于 2px（60fps 约 1.17px），若按实际
+      // 步长计算坡度，1~2px 的量化跳变会被误判为陡坡，坦克卡在缓坡上。
+      const climbSlope = Math.max(0, -dy / Math.max(subStep, Math.abs(dx)));
       if (climbSlope > TANK_CONFIG.maxClimbSlope) {
         // 爆炸后的像素地形常在坑沿留下很窄的尖唇。以履带半宽向前
         // 探测：若尖唇后方已经回到当前高度或更低，允许履带越过；
