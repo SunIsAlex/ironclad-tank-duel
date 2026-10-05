@@ -6,7 +6,8 @@ import type { ProjectileSystem } from '../systems/ProjectileSystem';
 import type { Tank, Particle, TreasureChest, TreasureReward } from '../types';
 import { BackgroundRenderer } from './BackgroundRenderer';
 import { TerrainRenderer } from './TerrainRenderer';
-import { TANK_CONFIG, WORLD_CONFIG } from '../config/gameConfig';
+import { POWER_RANGE, TANK_CONFIG, WORLD_CONFIG } from '../config/gameConfig';
+import type { ShotRecord } from '../systems/ShotHistory';
 import { BATTLE_THEMES, type BattleTheme } from '../config/battleThemes';
 import { angleToVector, degToRad } from '../utils/math';
 import { COLORS, PLAYER_COLORS } from '../core/Constants';
@@ -25,6 +26,8 @@ export interface SceneOverlay {
   nextLavaLevel?: number | null;
   /** 回合提示横幅的强调色 */
   hintAccent?: string;
+  /** 当前操作方最近几发的实际弹道（新到旧） */
+  shotHistory?: readonly ShotRecord[];
 }
 
 export class Renderer {
@@ -95,6 +98,11 @@ export class Renderer {
       if (activeTank?.isAlive) this.renderAimGuide(ctx, activeTank, aimPoint);
     }
 
+    // 历史弹道：画在预测轨迹之下，便于对照修正
+    if (overlay.shotHistory?.length && turn.phase === 'PLAYER_CONTROL') {
+      this.renderShotHistory(ctx, overlay.shotHistory, camera.zoom);
+    }
+
     // 预测轨迹
     if (showTrajectory && turn.phase === 'PLAYER_CONTROL') {
       const tank = tanks[turn.currentPlayer];
@@ -137,6 +145,67 @@ export class Renderer {
     } else {
       this.hintText = '';
     }
+  }
+
+  private renderShotHistory(ctx: CanvasRenderingContext2D, shots: readonly ShotRecord[], zoom: number): void {
+    // 线宽与字号按镜头缩放换算，保证屏幕上的大小恒定
+    const px = 1 / Math.max(0.1, zoom);
+    ctx.save();
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    // 先画旧的，最新一发压在最上层
+    for (let i = shots.length - 1; i >= 0; i--) {
+      const shot = shots[i];
+      const latest = i === 0;
+      const weapon = weaponRegistry.get(shot.weaponId);
+      const color = weapon.trailColor ?? weapon.color;
+      ctx.globalAlpha = latest ? 0.9 : i === 1 ? 0.5 : 0.3;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = (latest ? 2.6 : 2) * px;
+      // 长度近似 0 的虚线段配合圆端点即成为圆点
+      ctx.setLineDash([0.01, 7 * px]);
+      for (const path of shot.paths) {
+        ctx.beginPath();
+        for (let j = 0; j < path.length; j++) {
+          const point = path[j];
+          const prev = path[j - 1];
+          // 穿越黑洞时坐标跳变，断开折线避免画出穿屏连线
+          if (!prev || Math.hypot(point.x - prev.x, point.y - prev.y) > 90) ctx.moveTo(point.x, point.y);
+          else ctx.lineTo(point.x, point.y);
+        }
+        ctx.stroke();
+      }
+      ctx.setLineDash([]);
+      // 落点标记与参数标签（取第一条弹体轨迹的终点）
+      const main = shot.paths[0];
+      const end = main[main.length - 1];
+      const size = 5 * px;
+      ctx.lineWidth = 1.6 * px;
+      ctx.beginPath();
+      ctx.moveTo(end.x - size, end.y - size);
+      ctx.lineTo(end.x + size, end.y + size);
+      ctx.moveTo(end.x + size, end.y - size);
+      ctx.lineTo(end.x - size, end.y + size);
+      ctx.stroke();
+      const powerPct = Math.round(((shot.power - POWER_RANGE.min) / (POWER_RANGE.max - POWER_RANGE.min)) * 100);
+      const label = `${latest ? '上一发 ' : ''}${Math.round(shot.angle)}° · ${powerPct}%`;
+      ctx.font = `700 ${11 * px}px system-ui, sans-serif`;
+      const w = ctx.measureText(label).width + 10 * px;
+      const h = 16 * px;
+      const lx = end.x - w / 2;
+      const ly = end.y - size - 6 * px - h;
+      ctx.fillStyle = 'rgba(4, 12, 24, 0.82)';
+      ctx.beginPath();
+      ctx.roundRect(lx, ly, w, h, h / 2);
+      ctx.fill();
+      ctx.lineWidth = 1 * px;
+      ctx.stroke();
+      ctx.fillStyle = latest ? '#ffffff' : 'rgba(230, 240, 255, 0.85)';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(label, end.x, ly + h / 2 + 0.5 * px);
+    }
+    ctx.restore();
   }
 
   private renderVignette(ctx: CanvasRenderingContext2D, vw: number, vh: number, dpr: number): void {

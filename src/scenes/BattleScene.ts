@@ -26,10 +26,16 @@ import {
 import { isFormElement } from '../systems/InputManager';
 import { audioSystem } from '../systems/AudioSystem';
 import { planAIShot, type AIShotPlan } from '../systems/AIController';
+import {
+  AI_MOVE_REASON_TEXT,
+  chooseAIMove,
+  chooseAITacticalWeapon,
+  type AIMovePlan,
+  type AITacticsContext,
+} from '../systems/AITactics';
 import { ShopPanel } from '../ui/ShopPanel';
 import {
   awardRoundCredits,
-  chooseAICombatWeapon,
   chooseAIShopItem,
   createBasicLoadout,
   purchaseWeapon,
@@ -43,6 +49,7 @@ import {
 } from '../systems/MatchRules';
 import { createTrainingLoadout, isTrainingTarget, restoreTrainingTarget } from '../systems/TrainingSystem';
 import type { OnlineInput } from '../net/OnlineSession';
+import { ShotHistory } from '../systems/ShotHistory';
 
 /** 集束弹已不可控制时上报的弹道进度，表示对手无需再等待。 */
 const ONLINE_FLIGHT_DONE = 1e9;
@@ -65,6 +72,7 @@ export class BattleScene implements Scene {
   readonly variant: GameVariant;
   private readonly theme: BattleTheme;
   private readonly hud = new HudRenderer();
+  private readonly shotHistory = new ShotHistory(3);
   private variantRound = 0;
   private lavaPlan: LavaPlan | null = null;
   private lavaLevel: number | null = null;
@@ -86,6 +94,14 @@ export class BattleScene implements Scene {
   private aiPlayer = -1;
   private aiThinkTimer = 0;
   private aiPlan: AIShotPlan | null = null;
+  /** AI 回合流程：思考 → 移动 → 换武器 → 瞄准开火 */
+  private aiStage: 'think' | 'move' | 'switch' | 'aim' | 'fired' = 'think';
+  /** 区分不同回合的标识，避免同一控制阶段重复规划 */
+  private aiTurnKey = -1;
+  private aiMove: AIMovePlan = { targetX: null, reason: null };
+  private aiStuckTimer = 0;
+  private aiWeaponTarget = 'basic_shell';
+  private aiCycleDir: 1 | -1 = 1;
   private landscapeHint: HTMLElement | null = null;
   private chestRound = 0;
   private wormholeRound = 0;
@@ -162,7 +178,7 @@ export class BattleScene implements Scene {
     this.turn.random = this.random;
     this.turn.fixedPlayer = mode === 'training' ? 0 : null;
     this.turn.turnFuel = fuel;
-    this.turn.windStrength = settings.windStrength;
+    this.turn.windStrength = settings.windEnabled ? settings.windStrength : 0;
     this.turn.turnTimeLimit = mode === 'training' ? 0 : capTurnTime(settings.turnTime, this.variant.turnTimeCap);
     this.turn.reset(this.tanks);
     this.turn.startGame();
@@ -383,6 +399,7 @@ export class BattleScene implements Scene {
         // 联机对手的集束弹尚未确认本步是否释放时暂停弹道，等待操作方进度。
         if (!this.handleClusterDetonation()) break;
         this.projectileSystem.update(dt);
+        this.shotHistory.sample(this.projectileSystem.getProjectiles());
         this.onlineFlightTick++;
         this.publishOnlineFlight();
         for (const event of this.projectileSystem.consumeWormholeEvents()) {
@@ -395,6 +412,7 @@ export class BattleScene implements Scene {
         this.updateTanksSettling(dt, false);
         if (!this.projectileSystem.hasAlive() && this.pendingExplosions.length === 0) {
           // 所有炮弹消失 -> 进入爆炸阶段（如果有未消化的）
+          this.shotHistory.end();
           this.turn.enterExplosion();
         } else {
           // 跟随主弹
@@ -516,15 +534,8 @@ export class BattleScene implements Scene {
     }
     this.weaponCyclePressed = tabNow;
 
-    if (weaponSwitchRequested) {
-      cycleWeapon(tank, 1);
-      // 跳过无弹药武器
-      let safety = weaponRegistry.all().length;
-      while (!hasAmmo(tank, tank.selectedWeaponId) && safety-- > 0) {
-        cycleWeapon(tank, 1);
-      }
-      audioSystem.click();
-    }
+    // 跳过无弹药武器
+    if (weaponSwitchRequested) this.cycleToNextAvailableWeapon(tank);
 
     // 移动
     const moveDir = (input.isDown('arrowleft') ? -1 : 0) +
@@ -723,50 +734,137 @@ export class BattleScene implements Scene {
       return;
     }
 
-    if (this.aiPlayer !== this.turn.currentPlayer || !this.aiPlan) {
+    const difficultyName = this.game.settings.aiDifficulty === 'elite' ? '精英 AI' : 'AI';
+    const turnKey = this.onlineTurnId();
+    if (this.aiTurnKey !== turnKey || this.aiPlayer !== this.turn.currentPlayer) {
+      this.aiTurnKey = turnKey;
       this.aiPlayer = this.turn.currentPlayer;
+      this.aiPlan = null;
+      this.aiStage = 'think';
       // 留出观察地形和风向的时间，避免 AI 像脚本一样瞬间完成操作。
-      this.aiThinkTimer = 1.1 + Math.random() * 0.9;
-      tank.selectedWeaponId = chooseAICombatWeapon(tank.ammo, {
-        distance: Math.abs(target.x - tank.x),
-        windStrength: this.wind.value,
-        difficulty: this.game.settings.aiDifficulty,
-      });
-      this.aiPlan = planAIShot(
-        tank,
-        target,
-        this.wind,
-        this.game.terrain,
-        Math.random,
-        tank.selectedWeaponId,
-        this.game.settings.aiDifficulty,
-        this.projectileSystem.getWormholes()
-      );
-      const difficultyName = this.game.settings.aiDifficulty === 'elite' ? '精英 AI' : '普通 AI';
-      this.turnHint = { text: `${tank.name}（${difficultyName}）正在判断…`, life: 2.5 };
+      this.aiThinkTimer = 0.7 + Math.random() * 0.6;
+      this.aiMove = chooseAIMove(this.aiTacticsContext(tank, target));
+      this.aiStuckTimer = 0;
+      this.turnHint = { text: `${tank.name}（${difficultyName}）正在判断…`, life: 1.6 };
       this.game.mobile.clearAll();
       this.firePressed = false;
       this.weaponCyclePressed = false;
     }
 
+    // 被炸空后先完成下落，再继续行动
+    if (this.settleTankAtCurrentPosition(tank, dt)) return;
     this.game.camera.followTank(tank.x, tank.y);
-    this.aiThinkTimer -= dt;
-    const angleDiff = this.aiPlan.angle - tank.turretAngle;
-    const angleStep = 42 * dt;
-    tank.turretAngle += clamp(angleDiff, -angleStep, angleStep);
-    const powerDiff = this.aiPlan.power - tank.power;
-    const powerStep = 150 * dt;
-    tank.power += clamp(powerDiff, -powerStep, powerStep);
 
-    const aimed = Math.abs(angleDiff) < 0.8 && Math.abs(powerDiff) < 3;
-    if (this.aiThinkTimer <= 0 && aimed) {
-      const plan = this.aiPlan;
-      this.aiPlan = null;
-      this.turnHint = { text: `${tank.name}（AI）开火！`, life: 1.1 };
-      this.fire(tank);
-      // 保留计划值直到进入下一位 AI 的回合，防止同一控制帧重复规划。
-      this.aiPlan = plan;
+    switch (this.aiStage) {
+      case 'think':
+        this.aiThinkTimer -= dt;
+        if (this.aiThinkTimer > 0) return;
+        if (this.aiMove.targetX !== null && this.aiMove.reason) {
+          this.aiStage = 'move';
+          this.turnHint = { text: `${tank.name} · ${AI_MOVE_REASON_TEXT[this.aiMove.reason]}`, life: 1.6 };
+        } else {
+          this.beginAIWeaponSwitch(tank, target);
+        }
+        return;
+      case 'move': {
+        const goal = this.aiMove.targetX ?? tank.x;
+        const gap = goal - tank.x;
+        let moved = false;
+        if (Math.abs(gap) > 2) {
+          const step = Math.min(Math.abs(gap), TANK_CONFIG.moveSpeed * dt);
+          moved = this.turn.moveTank(tank, gap > 0 ? 1 : -1, step, this.game.terrain);
+          if (moved && Math.random() < 0.3) audioSystem.tankMove();
+        }
+        // 到达、燃料耗尽或被陡坡挡住都结束移动，在实际位置重新规划
+        this.aiStuckTimer = moved ? 0 : this.aiStuckTimer + dt;
+        if (Math.abs(gap) <= 2 || this.aiStuckTimer > 0.25) this.beginAIWeaponSwitch(tank, target);
+        return;
+      }
+      case 'switch':
+        this.aiThinkTimer -= dt;
+        if (this.aiThinkTimer > 0) return;
+        if (tank.selectedWeaponId !== this.aiWeaponTarget && hasAmmo(tank, this.aiWeaponTarget)) {
+          // 与玩家按 Tab 一样逐个切换，让对手看得见 AI 的选择
+          this.cycleToNextAvailableWeapon(tank, this.aiCycleDir);
+          this.aiThinkTimer = 0.2;
+          return;
+        }
+        if (tank.selectedWeaponId !== 'basic_shell' || this.aiWeaponTarget !== 'basic_shell') {
+          this.turnHint = { text: `${tank.name} 选用 ${weaponRegistry.get(tank.selectedWeaponId).displayName}`, life: 1.3 };
+        }
+        this.aiPlan = planAIShot(
+          tank,
+          target,
+          this.wind,
+          this.game.terrain,
+          Math.random,
+          tank.selectedWeaponId,
+          this.game.settings.aiDifficulty,
+          this.projectileSystem.getWormholes()
+        );
+        this.aiThinkTimer = 0.4 + Math.random() * 0.4;
+        this.aiStage = 'aim';
+        return;
+      case 'aim': {
+        if (!this.aiPlan) return;
+        this.aiThinkTimer -= dt;
+        const angleDiff = this.aiPlan.angle - tank.turretAngle;
+        const angleStep = 42 * dt;
+        tank.turretAngle += clamp(angleDiff, -angleStep, angleStep);
+        const powerDiff = this.aiPlan.power - tank.power;
+        const powerStep = 150 * dt;
+        tank.power += clamp(powerDiff, -powerStep, powerStep);
+        const aimed = Math.abs(angleDiff) < 0.8 && Math.abs(powerDiff) < 3;
+        if (this.aiThinkTimer <= 0 && aimed) {
+          this.aiStage = 'fired';
+          this.turnHint = { text: `${tank.name}（${difficultyName}）开火！`, life: 1.1 };
+          this.fire(tank);
+        }
+        return;
+      }
+      case 'fired':
+        return;
     }
+  }
+
+  private aiTacticsContext(tank: Tank, target: Tank): AITacticsContext {
+    const opponentShot = this.shotHistory.get(target.playerIndex)[0];
+    const lastPath = opponentShot?.paths[0];
+    const urgency = this.turn.roundCount / this.variant.maxTurnsPerGame +
+      (tank.health < target.health ? 0.3 : 0);
+    return {
+      self: tank,
+      target,
+      wind: this.wind,
+      terrain: this.game.terrain,
+      difficulty: this.game.settings.aiDifficulty,
+      wormholes: this.projectileSystem.getWormholes(),
+      lavaLevel: this.lavaLevel,
+      nextLavaLevel: this.nextLavaLevel(),
+      threat: lastPath ? lastPath[lastPath.length - 1] : null,
+      urgency,
+    };
+  }
+
+  /** 在最终站位上选择武器，并进入逐个切换的展示阶段。 */
+  private beginAIWeaponSwitch(tank: Tank, target: Tank): void {
+    const choice = chooseAITacticalWeapon(this.aiTacticsContext(tank, target));
+    this.aiWeaponTarget = hasAmmo(tank, choice.weaponId) ? choice.weaponId : 'basic_shell';
+    // 沿较短方向切换
+    const owned = weaponRegistry.all().filter((weapon) => hasAmmo(tank, weapon.id)).map((weapon) => weapon.id);
+    const from = owned.indexOf(tank.selectedWeaponId);
+    const to = owned.indexOf(this.aiWeaponTarget);
+    const forward = from < 0 || to < 0 ? 0 : (to - from + owned.length) % owned.length;
+    this.aiCycleDir = forward <= owned.length - forward ? 1 : -1;
+    this.aiStage = 'switch';
+    this.aiThinkTimer = 0.25;
+  }
+
+  private cycleToNextAvailableWeapon(tank: Tank, dir: 1 | -1 = 1): void {
+    cycleWeapon(tank, dir);
+    let safety = weaponRegistry.all().length;
+    while (!hasAmmo(tank, tank.selectedWeaponId) && safety-- > 0) cycleWeapon(tank, dir);
+    audioSystem.click();
   }
 
   private fire(tank: Tank): void {
@@ -791,7 +889,9 @@ export class BattleScene implements Scene {
     const py = tank.y - TANK_CONFIG.bodyHeight + dir.y * (TANK_CONFIG.barrelLength + 6);
     audioSystem.fire();
     this.game.particles.spawnMuzzleFlash(px, py, tank.turretAngle);
+    this.shotHistory.begin(tank.playerIndex, tank.turretAngle, tank.power, weapon.id);
     this.projectileSystem.fire(tank, tank.turretAngle, tank.power);
+    this.shotHistory.sample(this.projectileSystem.getProjectiles());
     this.turn.enterProjectileFlying();
   }
 
@@ -852,6 +952,7 @@ export class BattleScene implements Scene {
     const explosions = this.projectileSystem.consumePendingExplosions();
     const { blastRadiusMultiplier, damageMultiplier, terrainDamageMultiplier } = this.variant;
     for (const ex of explosions) {
+      this.shotHistory.addImpact(ex.x, ex.y);
       // 弹坑半径 = 爆炸半径 × 地形系数；此处换算保证地形破坏倍率独立于爆炸范围。
       this.pendingExplosions.push({
         ...ex,
@@ -1093,6 +1194,8 @@ export class BattleScene implements Scene {
     // 每局轮换先手，避免五局中固定一方持续获得先手优势。
     this.turn.startGame(this.gamesPlayed % 2);
     this.resetVariantState();
+    // 新地形上旧弹道已无参考价值
+    this.shotHistory.clear();
     this.wind = this.turn.wind;
     this.projectileSystem.reset(this.tanks, this.wind);
     this.game.particles.reset();
@@ -1246,6 +1349,9 @@ export class BattleScene implements Scene {
       this.mouseAimPoint,
       {
         lavaLevel: this.lavaLevel,
+        shotHistory: game.settings.showShotHistory
+          ? this.shotHistory.get(this.turn.currentPlayer)
+          : [],
         nextLavaLevel: this.nextLavaLevel(),
         hintAccent: PLAYER_COLORS[this.turn.currentPlayer] ?? COLORS.Accent,
       }

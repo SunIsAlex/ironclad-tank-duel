@@ -118,7 +118,12 @@ export class MainMenuScene implements Scene {
       this.game.settings.player2Name = data.player2Name;
       this.game.settings.opponentMode = 'human';
       this.game.settings.mapSeed = data.seed;
-      Object.assign(this.game.settings, data.settings);
+      // 中继下发的是实际生效的风力；为 0 时改为关闭风力开关，保留本地的强度偏好，
+      // 双方据此得到相同的生效风力。
+      const { windStrength, ...shared } = data.settings;
+      Object.assign(this.game.settings, shared);
+      this.game.settings.windEnabled = windStrength > 0;
+      if (windStrength > 0) this.game.settings.windStrength = windStrength;
       this.game.saveSettings();
       // 旧版中继会丢弃玩法字段；此时双方都按经典模式开局，保持一致。
       this.startBattle('online', data.settings.gameVariant ?? 'classic');
@@ -157,9 +162,10 @@ export class MainMenuScene implements Scene {
     };
     start.onclick = () => {
       if (session.roomCode) {
-        const { mapPreset, turnTime, initialHealth, windStrength, movementFuel, gameVariant } = this.game.settings;
+        const { mapPreset, turnTime, initialHealth, windStrength, windEnabled, movementFuel, gameVariant } = this.game.settings;
+        // 联机只同步实际生效的风力强度，关闭风力即发送 0，旧版中继也能识别。
         session.start(generateRandomSeed(), this.game.settings.player1Name, this.game.settings.player2Name, {
-          mapPreset, turnTime, initialHealth, windStrength, movementFuel, gameVariant,
+          mapPreset, turnTime, initialHealth, windStrength: windEnabled ? windStrength : 0, movementFuel, gameVariant,
         });
       }
     };

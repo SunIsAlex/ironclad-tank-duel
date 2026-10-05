@@ -273,7 +273,13 @@ export class HudRenderer {
     ctx.textBaseline = 'middle';
     ctx.textAlign = ratio >= 0 ? 'left' : 'right';
     const labelX = ratio >= 0 ? x + 8 : x + w - 8;
-    ctx.fillText(`风 ${Math.abs(wind.value).toFixed(1)}`, labelX, y + h / 2 + 0.5);
+    const windOff = wind.displayStrength === 0 && wind.value === 0;
+    if (windOff) {
+      ctx.textAlign = 'center';
+      ctx.fillText('无风', cx, y + h / 2 + 0.5);
+    } else {
+      ctx.fillText(`风 ${Math.abs(wind.value).toFixed(1)}`, labelX, y + h / 2 + 0.5);
+    }
     ctx.restore();
   }
 

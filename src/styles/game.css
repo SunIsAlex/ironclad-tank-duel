@@ -372,6 +372,7 @@
   border-radius: 6px;
   min-height: 38px;
 }
+.settings-grid select:disabled { opacity: 0.45; cursor: not-allowed; }
 .settings-grid input[type='range'] {
   width: 100%;
 }

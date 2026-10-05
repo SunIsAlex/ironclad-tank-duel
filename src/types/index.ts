@@ -177,11 +177,15 @@ export interface GameSettings {
   turnTime: number; // 0 表示无限
   initialHealth: number;
   windStrength: number; // 0~3
+  /** 关闭时整场无风，风力强度设置保留 */
+  windEnabled: boolean;
   movementFuel: number;
   screenShake: boolean;
   musicVolume: number;
   sfxVolume: number;
   showTrajectory: boolean;
+  /** 显示本方最近几发的实际弹道 */
+  showShotHistory: boolean;
   reducedMotion: boolean;
   gameVariant: GameVariantId;
 }

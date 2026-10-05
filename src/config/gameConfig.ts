@@ -10,11 +10,13 @@ export const DEFAULT_SETTINGS: GameSettings = {
   turnTime: 0,
   initialHealth: 100,
   windStrength: 2,
+  windEnabled: true,
   movementFuel: 220,
   screenShake: true,
   musicVolume: 0.6,
   sfxVolume: 0.8,
   showTrajectory: true,
+  showShotHistory: true,
   reducedMotion: false,
   gameVariant: 'classic',
 };

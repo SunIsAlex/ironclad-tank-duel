@@ -65,8 +65,9 @@ export class SettingsPanel {
             </select>
           </label>
           <label>初始生命值<input type="number" id="set-hp" min="50" max="300" step="10" value="${s.initialHealth}" /></label>
+          <label class="checkbox"><input type="checkbox" id="set-wind-on" ${s.windEnabled ? 'checked' : ''} /> 启用风力</label>
           <label>风力强度
-            <select id="set-wind">
+            <select id="set-wind" ${s.windEnabled ? '' : 'disabled'}>
               <option value="0" ${s.windStrength === 0 ? 'selected' : ''}>无风</option>
               <option value="1" ${s.windStrength === 1 ? 'selected' : ''}>微风</option>
               <option value="2" ${s.windStrength === 2 ? 'selected' : ''}>中等</option>
@@ -76,6 +77,7 @@ export class SettingsPanel {
           <label>移动燃料<input type="number" id="set-fuel" min="0" max="600" step="20" value="${s.movementFuel}" /></label>
           <label class="checkbox"><input type="checkbox" id="set-shake" ${s.screenShake ? 'checked' : ''} /> 屏幕震动</label>
           <label class="checkbox"><input type="checkbox" id="set-traj" ${s.showTrajectory ? 'checked' : ''} /> 显示预测轨迹</label>
+          <label class="checkbox"><input type="checkbox" id="set-history" ${s.showShotHistory ? 'checked' : ''} /> 显示历史弹道（最近 3 发）</label>
           <label class="checkbox"><input type="checkbox" id="set-reduced" ${s.reducedMotion ? 'checked' : ''} /> 降低动画</label>
           <label>音乐音量<input type="range" id="set-music" min="0" max="1" step="0.05" value="${s.musicVolume}" /></label>
           <label>音效音量<input type="range" id="set-sfx" min="0" max="1" step="0.05" value="${s.sfxVolume}" /></label>
@@ -103,15 +105,18 @@ export class SettingsPanel {
       const turnEl = root.querySelector<HTMLSelectElement>('#set-turn');
       const hpEl = root.querySelector<HTMLInputElement>('#set-hp');
       const windEl = root.querySelector<HTMLSelectElement>('#set-wind');
+      const windOnEl = root.querySelector<HTMLInputElement>('#set-wind-on');
+      const historyEl = root.querySelector<HTMLInputElement>('#set-history');
       const fuelEl = root.querySelector<HTMLInputElement>('#set-fuel');
       const shakeEl = root.querySelector<HTMLInputElement>('#set-shake');
       const trajEl = root.querySelector<HTMLInputElement>('#set-traj');
       const reducedEl = root.querySelector<HTMLInputElement>('#set-reduced');
       const musicEl = root.querySelector<HTMLInputElement>('#set-music');
       const sfxEl = root.querySelector<HTMLInputElement>('#set-sfx');
-      if (!p1El || !p2El || !opponentEl || !aiDifficultyEl || !seedEl || !mapEl || !turnEl || !hpEl || !windEl || !fuelEl || !shakeEl || !trajEl || !reducedEl || !musicEl || !sfxEl) {
+      if (!p1El || !p2El || !opponentEl || !aiDifficultyEl || !seedEl || !mapEl || !turnEl || !hpEl || !windEl || !fuelEl || !shakeEl || !trajEl || !reducedEl || !musicEl || !sfxEl || !windOnEl || !historyEl) {
         return; // DOM 尚未就绪
       }
+      windEl.disabled = !windOnEl.checked;
       let seed = seedEl.value.trim();
       if (seed.length > 32) seed = seed.slice(0, 32);
       const turnTime = parseInt(turnEl.value, 10) || 0;
@@ -130,11 +135,13 @@ export class SettingsPanel {
         turnTime,
         initialHealth: hp,
         windStrength: wind,
+        windEnabled: windOnEl.checked,
         movementFuel: fuel,
         screenShake: shakeEl.checked,
         musicVolume: music,
         sfxVolume: sfx,
         showTrajectory: trajEl.checked,
+        showShotHistory: historyEl.checked,
         reducedMotion: reducedEl.checked,
         // 玩法模式由主菜单选择，设置面板只透传。
         gameVariant: this.settings.gameVariant,
