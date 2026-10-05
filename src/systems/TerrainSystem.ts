@@ -1,6 +1,7 @@
 import { WORLD_CONFIG, GROUND_THICKNESS } from '../config/gameConfig';
 import { createRng } from '../utils/random';
 import { getMapPreset, MAP_PRESETS, type TerrainShape } from '../config/mapConfig';
+import { BATTLE_THEMES, type BattleTheme } from '../config/battleThemes';
 
 // 地形系统：全分辨率二值体素是碰撞的唯一真源，Canvas 只负责显示。
 // 这样爆炸边缘的抗锯齿不会再让视觉地形与碰撞地形逐渐错位。
@@ -26,6 +27,8 @@ export class TerrainSystem {
   private solid: Uint8Array;
 
   initialized = false;
+  /** 地形配色；在 generate 前设置，绘制时烘焙进离屏 Canvas。 */
+  theme: BattleTheme = BATTLE_THEMES.nebula;
 
   constructor() {
     this.worldWidth = WORLD_CONFIG.worldWidth;
@@ -144,13 +147,14 @@ export class TerrainSystem {
     // 清空
     ctx.clearRect(0, 0, w, h);
 
-    // 岩层渐变：冷色合金矿脉 + 深色可破坏地壳。
-    const grad = ctx.createLinearGradient(0, this.ceiling, 0, h);
-    grad.addColorStop(0, '#2f7184');
-    grad.addColorStop(0.025, '#173f51');
-    grad.addColorStop(0.14, '#172d3b');
-    grad.addColorStop(0.55, '#101d28');
-    grad.addColorStop(1, '#070d14');
+    // 深层地壳：从最高地表到底部的纵向渐变，使用主题的中深层颜色。
+    const palette = this.theme.terrain;
+    let top = h;
+    for (let x = 0; x < w; x++) top = Math.min(top, this.heightMap[x]);
+    const grad = ctx.createLinearGradient(0, top, 0, h);
+    for (const [offset, color] of palette.stops.slice(1)) {
+      grad.addColorStop(Math.min(1, offset * 1.6), color);
+    }
     ctx.fillStyle = grad;
 
     // 绘制实体地形多边形
@@ -163,10 +167,50 @@ export class TerrainSystem {
     ctx.closePath();
     ctx.fill();
 
+    const surfacePath = (offset: number, step = 3): void => {
+      ctx.beginPath();
+      for (let x = 0; x < w; x += step) {
+        const y = this.heightMap[x] + offset + (offset > 20 ? sinLookup(x * 0.011 + offset) * 9 : 0);
+        if (x === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+    };
+
+    ctx.save();
+    ctx.clip();
+    // 地层纹理：沿地表平移的暗色岩层带，增加纵深感。
+    ctx.globalAlpha = 0.16;
+    ctx.strokeStyle = '#000';
+    for (let band = 0; band < 4; band++) {
+      ctx.lineWidth = 6 + band * 3;
+      surfacePath(40 + band * 46, 6);
+      ctx.stroke();
+    }
+    // 表土层：沿地表等厚分布，避免固定高度渐变在山顶与谷底间产生色带。
+    ctx.globalAlpha = 1;
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = palette.stops[1][1];
+    ctx.lineWidth = 30;
+    surfacePath(0);
+    ctx.stroke();
+    ctx.strokeStyle = palette.stops[0][1];
+    ctx.lineWidth = 8;
+    surfacePath(0);
+    ctx.stroke();
+    // 表层亮边下方的柔和反光。
+    ctx.globalAlpha = 0.2;
+    ctx.strokeStyle = palette.rimGlow;
+    ctx.lineWidth = 10;
+    ctx.filter = 'blur(6px)';
+    surfacePath(9);
+    ctx.stroke();
+    ctx.filter = 'none';
+    ctx.restore();
+
     // 顶部高光线
-    ctx.shadowColor = '#35d6ff';
+    ctx.shadowColor = palette.rimGlow;
     ctx.shadowBlur = 8;
-    ctx.strokeStyle = 'rgba(79, 222, 255, 0.72)';
+    ctx.strokeStyle = palette.rim;
     ctx.lineWidth = 2;
     ctx.beginPath();
     for (let x = 0; x < w; x++) {
@@ -180,7 +224,7 @@ export class TerrainSystem {
     for (let x = 0; x < w; x += 13) {
       const y = this.heightMap[x];
       const r = (sinLookup(x * 0.3) + 1) * 0.5;
-      ctx.fillStyle = r > .72 ? 'rgba(89, 229, 255, .7)' : 'rgba(144, 188, 200, .24)';
+      ctx.fillStyle = r > .72 ? palette.crystal : palette.crystalDim;
       ctx.fillRect(x, y - 2 - r * 2, r > .72 ? 2 : 1, 2 + r * 2);
     }
   }

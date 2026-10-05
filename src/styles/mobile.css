@@ -33,7 +33,10 @@
   border-radius: 12px;
   border: 1px solid var(--border);
   /* 控制面板不应遮住地形；文字保持不透明以确保可读性。 */
-  background: rgba(13, 24, 38, 0.42);
+  background: linear-gradient(180deg, rgba(20, 36, 58, 0.5), rgba(6, 14, 26, 0.42));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.08), 0 4px 14px rgba(0,0,0,.25);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
   color: var(--fg);
   display: flex;
   align-items: center;
@@ -61,22 +64,48 @@
   min-width: 90px;
   min-height: 64px;
   font-size: 18px;
-  background: linear-gradient(135deg, rgba(239, 71, 111, 0.78), rgba(255, 209, 102, 0.78));
-  color: #1b1b1b;
+  background: radial-gradient(circle at 50% 30%, rgba(255, 220, 130, 0.95), rgba(255, 110, 70, 0.85) 60%, rgba(220, 50, 90, 0.85));
+  color: #1b0a06;
   border: none;
+  border-radius: 999px;
+  box-shadow: 0 0 22px rgba(255, 120, 70, .45), inset 0 2px 0 rgba(255,255,255,.4);
+  letter-spacing: 2px;
+}
+
+@media (max-width: 980px) {
+  .mm-mode-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 
 @media (max-width: 720px) {
-  .mm-card { width: 140px; height: 80px; }
-  .mm-name { font-size: 14px; }
-  .mm-vs { font-size: 18px; }
+  .mm-card { min-width: 0; flex: 1; }
+  .mm-name { font-size: 13px; }
+  .mm-mode-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .result-row { font-size: 11px; }
 }
 
 @media (orientation: landscape) and (max-height: 480px) {
-  .mm-players { margin: 16px auto; }
-  .mm-card { height: 72px; }
-  .mm-title { font-size: 36px; }
+  .mm-inner { padding-top: calc(10px + var(--safe-top)); padding-bottom: 8px; }
+  .mm-kicker, .mm-version { display: none; }
+  .mm-title { font-size: 30px; letter-spacing: 4px; }
+  .mm-players { margin: 6px auto 8px; }
+  .mm-card { padding: 5px 12px; }
+  .mm-section-title { display: none; }
+  .mm-modes { margin-bottom: 8px; }
+  .mm-mode-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 6px; }
+  .mm-mode { min-height: 0; padding: 7px 6px; grid-template-columns: 1fr; justify-items: center; text-align: center; gap: 2px; }
+  .mm-mode-icon { width: 26px; height: 26px; }
+  .mm-mode-icon svg { width: 17px; height: 17px; }
+  .mm-mode-text { align-items: center; }
+  .mm-mode-text strong { font-size: 12px; }
+  .mm-mode-tagline { display: none; }
+  .mm-rules { margin-top: 6px; font-size: 11px; }
+  .mm-actions { gap: 6px; }
+  .mm-primary-actions .btn-large { min-width: 150px; padding: 9px 18px; font-size: 14px; }
+  .mm-secondary-actions .btn { min-height: 36px; padding: 6px 14px; }
+  .mm-hint { display: none; }
+  .result-panel { padding: 12px 16px; }
+  .result-banner { padding: 8px 0 10px; }
+  .result-banner h2 { font-size: 22px; }
   .shop-panel { padding: 12px; }
   .shop-panel .modal-actions { margin-top: 10px; }
   .shop-card { padding: 7px; }

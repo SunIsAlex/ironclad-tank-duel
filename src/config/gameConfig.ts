@@ -16,6 +16,7 @@ export const DEFAULT_SETTINGS: GameSettings = {
   sfxVolume: 0.8,
   showTrajectory: true,
   reducedMotion: false,
+  gameVariant: 'classic',
 };
 
 export interface GameWorldConfig {
@@ -25,11 +26,14 @@ export interface GameWorldConfig {
   windScale: number; // 风力强度等级对应的加速度
 }
 
+/** 标准重力；部分玩法会在对局开始时按倍率改写 WORLD_CONFIG.gravity。 */
+export const BASE_GRAVITY = 520;
+
 export const WORLD_CONFIG: GameWorldConfig = {
   // 内部世界像素尺寸（不随屏幕变化）
   worldWidth: 2400,
   worldHeight: 900,
-  gravity: 520,
+  gravity: BASE_GRAVITY,
   windScale: 55,
 };
 

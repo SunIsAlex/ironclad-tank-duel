@@ -16,6 +16,7 @@ function fakeCanvasContext(): CanvasRenderingContext2D {
     fillRect: () => undefined,
     save: () => undefined,
     restore: () => undefined,
+    clip: () => undefined,
     getImageData: (_x: number, _y: number, width: number, height: number) => ({
       data: new Uint8ClampedArray(width * height * 4),
     }),

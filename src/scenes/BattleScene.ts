@@ -4,13 +4,25 @@ import { createTank, consumeAmmo, hasAmmo, cycleWeapon } from '../entities/Tank'
 import { TurnManager } from '../systems/TurnManager';
 import { ProjectileSystem } from '../systems/ProjectileSystem';
 import { Renderer } from '../rendering/Renderer';
+import { HudRenderer } from '../rendering/HudRenderer';
 import { BattleHud } from '../ui/BattleHud';
 import { TouchControls } from '../ui/TouchControls';
 import { createRng, generateRandomSeed } from '../utils/random';
 import { clamp, angleToVector, radToDeg } from '../utils/math';
-import { POWER_RANGE, ANGLE_RANGE, TANK_CONFIG, WORLD_CONFIG } from '../config/gameConfig';
+import { POWER_RANGE, ANGLE_RANGE, TANK_CONFIG, WORLD_CONFIG, BASE_GRAVITY } from '../config/gameConfig';
 import { weaponRegistry } from '../weapons/WeaponRegistry';
-import { COLORS } from '../core/Constants';
+import { COLORS, PLAYER_COLORS } from '../core/Constants';
+import { getGameVariant, TRAINING_VARIANT, type GameVariant } from '../config/gameVariants';
+import { getBattleTheme, type BattleTheme } from '../config/battleThemes';
+import {
+  capTurnTime,
+  isSubmergedInLava,
+  LAVA_DAMAGE_PER_TURN,
+  lavaLevelForRound,
+  pickSupplyDrop,
+  planLava,
+  type LavaPlan,
+} from '../systems/VariantRules';
 import { isFormElement } from '../systems/InputManager';
 import { audioSystem } from '../systems/AudioSystem';
 import { planAIShot, type AIShotPlan } from '../systems/AIController';
@@ -26,7 +38,6 @@ import {
   hasWonMatch,
   MATCH_MAX_GAMES,
   MATCH_WINS_REQUIRED,
-  MAX_TURNS_PER_GAME,
   nextGameHealth,
   resolveRoundByHealth,
 } from '../systems/MatchRules';
@@ -51,6 +62,12 @@ interface PendingExplosion {
 export class BattleScene implements Scene {
   private game: Game;
   readonly mode: GameMode;
+  readonly variant: GameVariant;
+  private readonly theme: BattleTheme;
+  private readonly hud = new HudRenderer();
+  private variantRound = 0;
+  private lavaPlan: LavaPlan | null = null;
+  private lavaLevel: number | null = null;
   tanks: Tank[];
   turn: TurnManager;
   projectileSystem: ProjectileSystem;
@@ -109,9 +126,15 @@ export class BattleScene implements Scene {
   private onlineEndTimer = -1;
   private random: () => number = Math.random;
 
-  constructor(game: Game, mode: GameMode = 'duel') {
+  constructor(game: Game, mode: GameMode = 'duel', variantId?: string) {
     this.game = game;
     this.mode = mode;
+    this.variant = mode === 'training'
+      ? TRAINING_VARIANT
+      : getGameVariant(variantId ?? game.settings.gameVariant);
+    this.theme = getBattleTheme(this.variant.theme);
+    // 重力是全局物理参数；每场对局开始时按模式显式设定，避免沿用上一场。
+    WORLD_CONFIG.gravity = BASE_GRAVITY * this.variant.gravityMultiplier;
     // 种子
     const settings = game.settings;
     this.nextHealth = [settings.initialHealth, settings.initialHealth];
@@ -121,12 +144,13 @@ export class BattleScene implements Scene {
     game.saveSettings();
 
     // 创建地形（必要时复用 game.terrain）
+    game.terrain.theme = this.theme;
     game.terrain.generate(this.seed, settings.mapPreset);
-    this.renderer = new Renderer(this.seed);
+    this.renderer = new Renderer(this.seed, this.theme);
 
     // 坦克
     const hp = settings.initialHealth;
-    const fuel = settings.movementFuel;
+    const fuel = this.turnFuel();
     const t1 = createTank('t1', 0, settings.player1Name, 0, 0, hp, fuel, 'basic_shell');
     const targetName = mode === 'training' ? '训练靶机' : settings.player2Name;
     const t2 = createTank('t2', 1, targetName, 0, 0, hp, fuel, 'basic_shell');
@@ -139,9 +163,10 @@ export class BattleScene implements Scene {
     this.turn.fixedPlayer = mode === 'training' ? 0 : null;
     this.turn.turnFuel = fuel;
     this.turn.windStrength = settings.windStrength;
-    this.turn.turnTimeLimit = mode === 'training' ? 0 : settings.turnTime;
+    this.turn.turnTimeLimit = mode === 'training' ? 0 : capTurnTime(settings.turnTime, this.variant.turnTimeCap);
     this.turn.reset(this.tanks);
     this.turn.startGame();
+    this.resetVariantState();
 
     game.camera.x = this.tanks[0].x;
     game.camera.followTank(this.tanks[0].x, this.tanks[0].y);
@@ -164,8 +189,75 @@ export class BattleScene implements Scene {
       this.applyInventoriesToTanks();
       if (mode === 'online') this.shopOpen = false;
       else this.openShop(-1);
+      if (!this.shopOpen && this.variant.id !== 'classic') {
+        this.turnHint = { text: `${this.variant.displayName} · ${this.variant.tagline}`, life: 2.2 };
+      }
     }
 
+  }
+
+  private turnFuel(): number {
+    return Math.round(this.game.settings.movementFuel * this.variant.fuelMultiplier);
+  }
+
+  /** 新一局开始时重置模式状态（熔岩从谷底重新规划）。 */
+  private resetVariantState(): void {
+    this.variantRound = 0;
+    this.lavaPlan = this.variant.risingLava
+      ? planLava(this.game.terrain.heightMap, this.variant.maxTurnsPerGame)
+      : null;
+    this.lavaLevel = this.lavaPlan ? lavaLevelForRound(this.lavaPlan, 1) : null;
+  }
+
+  /**
+   * 每个操作回合开始时执行一次的模式效果。返回 true 表示本局已因此结束。
+   * 随机数按固定顺序消耗，联机双方得到相同结果。
+   */
+  private applyRoundModifiers(): boolean {
+    if (this.lavaPlan) {
+      this.lavaLevel = lavaLevelForRound(this.lavaPlan, this.turn.roundCount);
+      let burned = false;
+      for (const tank of this.tanks) {
+        if (!tank.isAlive || !isSubmergedInLava(tank.y, this.lavaLevel)) continue;
+        burned = true;
+        tank.health = Math.max(0, tank.health - LAVA_DAMAGE_PER_TURN);
+        tank.hitFlash = 0.4;
+        this.game.particles.spawnDamageNumber(tank.x, tank.y - 30, LAVA_DAMAGE_PER_TURN);
+        this.game.particles.spawnExplosion(tank.x, tank.y - 4, 20, '#ff8a1f');
+        if (tank.health <= 0) {
+          tank.isAlive = false;
+          this.game.particles.spawnExplosion(tank.x, tank.y - 8, 60, COLORS.Warning);
+          this.game.camera.shake(18, 0.5);
+        }
+      }
+      if (burned) {
+        audioSystem.tankHit();
+        this.turnHint = { text: '熔岩灼烧！浸没的坦克受到伤害', life: 1.6 };
+      }
+      const victory = this.turn.checkVictory();
+      if (victory.isOver) {
+        this.finishRound(victory);
+        return true;
+      }
+    }
+    if (this.variant.supplyDrops) {
+      const tank = this.tanks[this.turn.currentPlayer];
+      if (tank?.isAlive) {
+        const weaponId = pickSupplyDrop(this.random);
+        const weapon = weaponRegistry.get(weaponId);
+        tank.ammo[weaponId] = Math.max(0, tank.ammo[weaponId] ?? 0) + 1;
+        tank.selectedWeaponId = weaponId;
+        this.game.particles.spawnExplosion(tank.x, tank.y - 46, 22, weapon.color);
+        this.turnHint = { text: `空投补给 · ${weapon.displayName}`, life: 1.6 };
+        audioSystem.click();
+      }
+    }
+    return false;
+  }
+
+  private nextLavaLevel(): number | null {
+    if (!this.lavaPlan || this.turn.roundCount >= this.variant.maxTurnsPerGame) return null;
+    return lavaLevelForRound(this.lavaPlan, this.turn.roundCount + 1);
   }
 
   private placeTanks(): void {
@@ -258,7 +350,7 @@ export class BattleScene implements Scene {
     switch (this.turn.phase) {
       case 'TURN_START':
         // 第 10 次操作已经完整结算；第 11 回合只显示裁决，不再给予控制权。
-        if (this.mode !== 'training' && this.turn.roundCount > MAX_TURNS_PER_GAME) {
+        if (this.mode !== 'training' && this.turn.roundCount > this.variant.maxTurnsPerGame) {
           this.resolveTurnLimit();
           return;
         }
@@ -267,9 +359,13 @@ export class BattleScene implements Scene {
           this.chestRound = this.turn.roundCount;
         }
         if (this.mode !== 'training' && this.wormholeRound !== this.turn.roundCount) {
-          const appeared = this.projectileSystem.spawnWormholesForTurn(0.3, this.random);
+          const appeared = this.projectileSystem.spawnWormholesForTurn(this.variant.wormholeChance, this.random);
           this.wormholeRound = this.turn.roundCount;
           if (appeared) this.turnHint = { text: '空间异常：双向黑洞出现！', life: 1.8 };
+        }
+        if (this.mode !== 'training' && this.variantRound !== this.turn.roundCount) {
+          this.variantRound = this.turn.roundCount;
+          if (this.applyRoundModifiers()) return;
         }
         // 提示
         if (!this.turnHint) {
@@ -754,8 +850,16 @@ export class BattleScene implements Scene {
 
   private consumeExplosions(): void {
     const explosions = this.projectileSystem.consumePendingExplosions();
+    const { blastRadiusMultiplier, damageMultiplier, terrainDamageMultiplier } = this.variant;
     for (const ex of explosions) {
-      this.pendingExplosions.push({ ...ex, processed: false });
+      // 弹坑半径 = 爆炸半径 × 地形系数；此处换算保证地形破坏倍率独立于爆炸范围。
+      this.pendingExplosions.push({
+        ...ex,
+        radius: ex.radius * blastRadiusMultiplier,
+        damage: Math.round(ex.damage * damageMultiplier),
+        terrainDamageMultiplier: ex.terrainDamageMultiplier * terrainDamageMultiplier / blastRadiusMultiplier,
+        processed: false,
+      });
     }
     if (this.pendingExplosions.length === 0) return;
     for (const ex of this.pendingExplosions) {
@@ -775,7 +879,7 @@ export class BattleScene implements Scene {
     terrain.carveCircle(ex.x, ex.y, craterR);
     // 粒子
     this.game.particles.spawnExplosion(ex.x, ex.y, ex.radius, ex.weaponColor);
-    this.game.particles.spawnDebris(ex.x, ex.y, '#5b3d24', 14);
+    this.game.particles.spawnDebris(ex.x, ex.y, this.theme.terrain.debris, 14);
     // 屏幕震动
     this.game.camera.shake(Math.min(14, ex.radius * 0.15), 0.35);
     audioSystem.explosion();
@@ -938,12 +1042,13 @@ export class BattleScene implements Scene {
     this.turn.enterGameOver();
     this.roundEnding = true;
     this.gamesPlayed++;
-    this.totalTurns += Math.min(this.turn.roundCount, MAX_TURNS_PER_GAME);
+    this.totalTurns += Math.min(this.turn.roundCount, this.variant.maxTurnsPerGame);
     this.tanks.forEach((tank, index) => {
       this.aggregateStats[index].damageDealt += tank.damageDealt;
       this.aggregateStats[index].hitCount += tank.hitCount;
       this.aggregateStats[index].directHitCount += tank.directHitCount;
-      this.inventories[index] = { ...tank.ammo };
+      // 空投武器只在当局有效，避免军火狂欢后期弹药无限膨胀。
+      this.inventories[index] = this.variant.supplyDrops ? createBasicLoadout() : { ...tank.ammo };
     });
 
     this.nextHealth = nextGameHealth(this.tanks, v.winnerIndex, this.game.settings.initialHealth);
@@ -953,7 +1058,7 @@ export class BattleScene implements Scene {
     this.lastRoundWinner = v.isDraw ? -1 : v.winnerIndex;
     this.matchComplete = hasWonMatch(this.matchWins);
 
-    const reason = decidedByTurnLimit ? '十回合血量裁决' : '击毁对手';
+    const reason = decidedByTurnLimit ? `${this.variant.maxTurnsPerGame} 回合血量裁决` : '击毁对手';
     if (v.isDraw) {
       this.turnHint = { text: `第 ${this.gameNumber} 局平局 · 双方重赛`, life: 2.4 };
     } else {
@@ -973,7 +1078,7 @@ export class BattleScene implements Scene {
     const settings = this.game.settings;
     this.terrainAttempt++;
     this.game.terrain.generate(`${this.seed}:game:${this.terrainAttempt}`, settings.mapPreset);
-    const fuel = settings.movementFuel;
+    const fuel = this.turnFuel();
     const tanks = [
       createTank('t1', 0, settings.player1Name, 0, 0, settings.initialHealth, fuel, 'basic_shell'),
       createTank('t2', 1, settings.player2Name, 0, 0, settings.initialHealth, fuel, 'basic_shell'),
@@ -987,6 +1092,7 @@ export class BattleScene implements Scene {
     this.turn.reset(this.tanks);
     // 每局轮换先手，避免五局中固定一方持续获得先手优势。
     this.turn.startGame(this.gamesPlayed % 2);
+    this.resetVariantState();
     this.wind = this.turn.wind;
     this.projectileSystem.reset(this.tanks, this.wind);
     this.game.particles.reset();
@@ -1035,7 +1141,7 @@ export class BattleScene implements Scene {
       awardRoundCredits(this.credits[0], previousWinner === 0),
       awardRoundCredits(this.credits[1], previousWinner === 1),
     ];
-    if (this.mode === 'online') {
+    if (this.mode === 'online' || !this.variant.shopEnabled) {
       this.shopOpen = false;
       return;
     }
@@ -1102,6 +1208,7 @@ export class BattleScene implements Scene {
     this.roundEnding = false;
     const winnerIndex = this.matchWins[0] >= MATCH_WINS_REQUIRED ? 0 : 1;
     const stats: MissionStats = {
+      variantId: this.variant.id,
       totalRounds: this.totalTurns,
       gamesPlayed: this.gamesPlayed,
       matchWins: [...this.matchWins],
@@ -1136,20 +1243,53 @@ export class BattleScene implements Scene {
       this.turnHint,
       alpha,
       game.dpr,
-      this.mouseAimPoint
+      this.mouseAimPoint,
+      {
+        lavaLevel: this.lavaLevel,
+        nextLavaLevel: this.nextLavaLevel(),
+        hintAccent: PLAYER_COLORS[this.turn.currentPlayer] ?? COLORS.Accent,
+      }
     );
-    // 顶部 HUD（屏幕坐标）
-    const tank = this.tanks[this.turn.currentPlayer];
-    if (tank) {
-      // 顶部 HUD
-      const phaseHint = this.getPhaseHint();
-      // 使用 canvas 屏幕坐标绘制 HUD
-      ctx.save();
-      ctx.setTransform(game.dpr, 0, 0, game.dpr, 0, 0);
-      this.renderTopHud(ctx, game.viewportWidth);
-      this.renderBottomBar(ctx, game.viewportWidth, game.viewportHeight, tank, phaseHint);
-      ctx.restore();
+    if (!this.tanks[this.turn.currentPlayer]) return;
+    ctx.save();
+    ctx.setTransform(game.dpr, 0, 0, game.dpr, 0, 0);
+    this.hud.render(ctx, game.viewportWidth, game.viewportHeight, {
+      tanks: this.tanks,
+      currentPlayer: this.turn.currentPlayer,
+      phase: this.turn.phase,
+      roles: this.tanks.map((tank) => this.roleLabel(tank)),
+      credits: this.tanks.map((tank) =>
+        this.mode === 'training' || !this.variant.shopEnabled ? null : this.credits[tank.playerIndex]
+      ),
+      invulnerable: this.tanks.map((tank) => this.mode === 'training' && isTrainingTarget(tank)),
+      matchWins: this.matchWins,
+      winsRequired: this.mode === 'training' ? 0 : MATCH_WINS_REQUIRED,
+      title: this.mode === 'training'
+        ? '训练场'
+        : `第 ${this.gameNumber}/${MATCH_MAX_GAMES} 局  ${this.matchWins[0]} : ${this.matchWins[1]}`,
+      roundLabel: this.mode === 'training'
+        ? `第 ${this.turn.roundCount} 发`
+        : `回合 ${Math.min(this.turn.roundCount, this.variant.maxTurnsPerGame)}/${this.variant.maxTurnsPerGame}`,
+      variant: this.mode === 'training'
+        ? { ...this.variant, displayName: '训练场', englishName: 'TARGET RANGE', accent: '#ffe169' }
+        : this.variant,
+      wind: this.wind,
+      timer: this.turn.turnTimeLimit > 0 && this.turn.phase === 'PLAYER_CONTROL' ? this.turn.turnTimer : null,
+      // 触控布局下不显示键盘操作提示
+      hint: this.touchControls.isVisible && this.turn.phase === 'PLAYER_CONTROL' && !this.isAITurn()
+        ? ''
+        : this.getPhaseHint(),
+      compact: this.touchControls.isVisible,
+    });
+    ctx.restore();
+  }
+
+  private roleLabel(tank: Tank): string {
+    if (this.mode === 'training' && isTrainingTarget(tank)) return 'BOT';
+    if (tank.playerIndex === 1 && this.game.settings.opponentMode === 'ai' && this.mode !== 'online') {
+      return this.game.settings.aiDifficulty === 'elite' ? '精英 AI' : 'AI';
     }
+    return `P${tank.playerIndex + 1}`;
   }
 
   private getPhaseHint(): string {
@@ -1177,121 +1317,6 @@ export class BattleScene implements Scene {
       default:
         return '';
     }
-  }
-
-  private renderTopHud(ctx: CanvasRenderingContext2D, vw: number): void {
-    // 委托给 rendering/HudRenderer 的等价实现，简化在此直接绘制
-    const h = 56;
-    ctx.fillStyle = COLORS.HUDBackground;
-    ctx.fillRect(0, 0, vw, h);
-    ctx.fillStyle = 'rgba(255,255,255,0.06)';
-    ctx.fillRect(0, h, vw, 1);
-
-    const drawPlayer = (tank: Tank, x: number, active: boolean): void => {
-      const w = 220;
-      const hh = 44;
-      const y = 6;
-      if (active) {
-        ctx.strokeStyle = COLORS.Accent;
-        ctx.lineWidth = 2;
-        ctx.strokeRect(x - 1, y - 1, w + 2, hh + 2);
-      }
-      ctx.fillStyle = 'rgba(0,0,0,0.3)';
-      ctx.fillRect(x, y, w, hh);
-      const color = COLORS.P1 === '#4ec5ff' && tank.playerIndex === 0 ? COLORS.P1 : COLORS.P2;
-      ctx.fillStyle = color;
-      ctx.fillRect(x + 4, y + 4, 6, hh - 8);
-      ctx.fillStyle = COLORS.HUDForeground;
-      ctx.font = 'bold 12px monospace';
-      ctx.textAlign = 'left';
-      ctx.textBaseline = 'top';
-      const trainingTarget = this.mode === 'training' && isTrainingTarget(tank);
-      const role = trainingTarget ? 'BOT' : tank.playerIndex === 1 && this.game.settings.opponentMode === 'ai'
-        ? (this.game.settings.aiDifficulty === 'elite' ? '精英AI' : '普通AI')
-        : `P${tank.playerIndex + 1}`;
-      const credits = this.mode === 'training' ? '' : `  ◆${this.credits[tank.playerIndex]}`;
-      ctx.fillText(`${tank.name}  ${role}${credits}${tank.isAlive ? '' : ' †'}`, x + 16, y + 6);
-      // 血条
-      const barX = x + 16;
-      const barY = y + 22;
-      const barW = w - 24;
-      ctx.fillStyle = '#0b1b2a';
-      ctx.fillRect(barX, barY, barW, 8);
-      const ratio = trainingTarget ? 1 : Math.max(0, tank.health / tank.maxHealth);
-      ctx.fillStyle = ratio > 0.4 ? COLORS.Success : COLORS.Warning;
-      ctx.fillRect(barX, barY, barW * ratio, 8);
-      ctx.fillStyle = COLORS.HUDForeground;
-      ctx.font = '10px monospace';
-      ctx.fillText(
-        trainingTarget ? '耐久 ∞' : `${Math.ceil(tank.health)} / ${tank.maxHealth}`,
-        barX, barY + 10
-      );
-    };
-
-    drawPlayer(this.tanks[0], 12, this.turn.currentPlayer === 0);
-    drawPlayer(this.tanks[1], vw - 232, this.turn.currentPlayer === 1);
-
-    const cx = vw / 2;
-    ctx.fillStyle = COLORS.HUDForeground;
-    ctx.font = 'bold 14px monospace';
-    ctx.textAlign = 'center';
-    ctx.fillText(
-      this.mode === 'training'
-        ? '训练场 // TARGET RANGE'
-        : `第 ${this.gameNumber}/${MATCH_MAX_GAMES} 局 · ${this.matchWins[0]}:${this.matchWins[1]}`,
-      cx, 8
-    );
-    // 风
-    const arrow = this.wind.value > 0 ? '→' : this.wind.value < 0 ? '←' : '·';
-    ctx.font = '12px monospace';
-    const roundLabel = this.mode === 'training'
-      ? `第 ${this.turn.roundCount} 发`
-      : `回合 ${Math.min(this.turn.roundCount, MAX_TURNS_PER_GAME)}/${MAX_TURNS_PER_GAME}`;
-    ctx.fillText(`${roundLabel} · 风 ${arrow} ${Math.abs(this.wind.value).toFixed(2)}`, cx, 26);
-    ctx.fillStyle = this.turn.currentPlayer === 0 ? COLORS.P1 : COLORS.P2;
-    ctx.font = 'bold 12px monospace';
-    ctx.fillText(`当前：${this.tanks[this.turn.currentPlayer]?.name ?? ''}`, cx, 42);
-    if (this.turn.turnTimeLimit > 0 && this.turn.phase === 'PLAYER_CONTROL') {
-      ctx.fillStyle = this.turn.turnTimer < 5 ? COLORS.Warning : COLORS.Accent;
-      ctx.fillText(`剩余 ${Math.ceil(this.turn.turnTimer)}s`, cx, h - 16);
-    }
-  }
-
-  private renderBottomBar(
-    ctx: CanvasRenderingContext2D,
-    vw: number,
-    vh: number,
-    tank: Tank,
-    hint: string
-  ): void {
-    const h = 70;
-    const y = vh - h;
-    ctx.fillStyle = COLORS.HUDBackground;
-    ctx.fillRect(0, y, vw, h);
-    ctx.fillStyle = COLORS.HUDForeground;
-    ctx.font = '12px monospace';
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'top';
-    const weapon = weaponRegistry.get(tank.selectedWeaponId);
-    const ammoStr = tank.ammo[weapon.id] === -1 ? '∞' : `${tank.ammo[weapon.id]}`;
-    ctx.fillText(`武器：${weapon.displayName} (${ammoStr})  ${weapon.description}`, 12, y + 8);
-    ctx.fillText(`角度：${Math.round(tank.turretAngle)}°`, 12, y + 28);
-    ctx.fillText(`力度`, 12, y + 46);
-    const pw = vw - 200;
-    ctx.fillStyle = '#0b1b2a';
-    ctx.fillRect(50, y + 48, pw - 50, 8);
-    const ratio = (tank.power - POWER_RANGE.min) / (POWER_RANGE.max - POWER_RANGE.min);
-    ctx.fillStyle = COLORS.Accent;
-    ctx.fillRect(50, y + 48, (pw - 50) * ratio, 8);
-    ctx.fillStyle = COLORS.HUDForeground;
-    ctx.fillText(`燃料`, 50, y + 28);
-    ctx.fillStyle = '#0b1b2a';
-    ctx.fillRect(80, y + 30, 100, 6);
-    ctx.fillStyle = COLORS.Success;
-    ctx.fillRect(80, y + 30, 100 * (tank.movementFuel / tank.maxFuel), 6);
-    ctx.fillStyle = COLORS.Accent;
-    ctx.font = '11px monospace';
-    ctx.fillText(hint, 12, y + 60);
   }
 
   handleKeyDown(e: KeyboardEvent): boolean {

@@ -116,3 +116,20 @@ describe('AI 弹道规划', () => {
     expect(highRoll.power).toBeLessThanOrEqual(820);
   });
 });
+
+describe('非标准重力下的 AI', () => {
+  it('月面重力模式中普通与精英 AI 都能修正弹道', async () => {
+    const { WORLD_CONFIG, BASE_GRAVITY } = await import('../src/config/gameConfig');
+    WORLD_CONFIG.gravity = BASE_GRAVITY * 0.45;
+    try {
+      const shooter = createTank('ai', 1, 'AI', 1100, 500, 100, 0, 'basic_shell');
+      const target = createTank('p1', 0, 'P1', 450, 500, 100, 0, 'basic_shell');
+      for (const difficulty of ['normal', 'elite'] as const) {
+        const plan = planAIShot(shooter, target, { value: 1.5, displayStrength: 2 }, flatTerrain, () => 0.5, 'basic_shell', difficulty);
+        expect(plan.missDistance).toBeLessThan(difficulty === 'elite' ? 25 : 65);
+      }
+    } finally {
+      WORLD_CONFIG.gravity = BASE_GRAVITY;
+    }
+  });
+});

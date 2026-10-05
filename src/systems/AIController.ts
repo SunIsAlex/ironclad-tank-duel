@@ -1,5 +1,5 @@
 import type { Tank, WindState, WormholePair } from '../types';
-import { POWER_RANGE, TANK_CONFIG, WORLD_CONFIG } from '../config/gameConfig';
+import { BASE_GRAVITY, POWER_RANGE, TANK_CONFIG, WORLD_CONFIG } from '../config/gameConfig';
 import { weaponRegistry } from '../weapons/WeaponRegistry';
 import { angleToVector, clamp, segmentCircleHit } from '../utils/math';
 import { predictOfflineShot } from './OfflineAIModel';
@@ -115,16 +115,20 @@ export function planAIShot(
     ? predictEliteShot(distance, heightUp, windAlong, weapon)
     : null;
   const prediction = elitePrediction ?? predictOfflineShot(distance, heightUp, windAlong);
+  // 模型在标准重力下训练。重力缩放 k 时，力度乘以 √k 可在无风条件下得到
+  // 同形弹道；剩余的风力偏差交给下方的物理搜索修正。
+  const gravityScale = WORLD_CONFIG.gravity / BASE_GRAVITY;
+  const gravityPowerScale = Math.sqrt(gravityScale);
   if (prediction) {
     const angle = shootsRight ? prediction.elevation : 180 - prediction.elevation;
     // 模型由基础弹道训练；按武器速度与重力做近似换算，保留小模型的不完美。
-    const adjustedPower = elitePrediction
-      ? prediction.power
-      : clamp(
-        prediction.power * Math.sqrt(weapon.gravityMultiplier) / weapon.projectileSpeedMultiplier,
-        POWER_RANGE.min,
-        POWER_RANGE.max
-      );
+    const adjustedPower = clamp(
+      (elitePrediction
+        ? prediction.power
+        : prediction.power * Math.sqrt(weapon.gravityMultiplier) / weapon.projectileSpeedMultiplier) * gravityPowerScale,
+      POWER_RANGE.min,
+      POWER_RANGE.max
+    );
     best = { angle, power: adjustedPower, missDistance: evaluate(angle, adjustedPower) };
   } else {
     // 权重损坏或版本不兼容时仍可进行游戏；仅回退路径使用低精度搜索。
@@ -138,11 +142,23 @@ export function planAIShot(
 
   // 扩展地图上的远距离超出了旧模型的主要训练区间，用物理模拟做一次
   // 粗粒度全局校正，避免 AI 在大型战场上持续打短。
-  if (distance > 1050) {
+  if (distance > 1050 || Math.abs(gravityScale - 1) > 0.01) {
     for (let angle = minAngle; angle <= maxAngle; angle += 6) {
       for (let power = POWER_RANGE.min; power <= POWER_RANGE.max; power += 40) {
         const nearest = evaluate(angle, power);
         if (nearest < best.missDistance) best = { angle, power, missDistance: nearest };
+      }
+    }
+    // 非标准重力下模型初值不可靠，精英 AI 在粗搜索结果附近再细化一次。
+    if (difficulty === 'elite' && Math.abs(gravityScale - 1) > 0.01) {
+      const center = best;
+      for (let angle = center.angle - 6; angle <= center.angle + 6; angle += 1) {
+        if (angle < minAngle || angle > maxAngle) continue;
+        for (let power = center.power - 40; power <= center.power + 40; power += 5) {
+          if (power < POWER_RANGE.min || power > POWER_RANGE.max) continue;
+          const nearest = evaluate(angle, power);
+          if (nearest < best.missDistance) best = { angle, power, missDistance: nearest };
+        }
       }
     }
   }

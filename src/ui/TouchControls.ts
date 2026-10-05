@@ -45,6 +45,10 @@ export class TouchControls {
     });
   }
 
+  get isVisible(): boolean {
+    return this.visible;
+  }
+
   setVisible(v: boolean): void {
     this.visible = v;
     this.root.style.display = v ? '' : 'none';

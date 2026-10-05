@@ -136,6 +136,8 @@ export class SettingsPanel {
         sfxVolume: sfx,
         showTrajectory: trajEl.checked,
         reducedMotion: reducedEl.checked,
+        // 玩法模式由主菜单选择，设置面板只透传。
+        gameVariant: this.settings.gameVariant,
       };
       this.onChange(this.settings);
     };

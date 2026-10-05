@@ -20,7 +20,7 @@ export class ResultScene implements Scene {
         // 重置玩家名为当前设置（防止改了名字后未更新）
         game.battle?.destroy();
         game.battle = undefined;
-        game.gotoBattle();
+        game.gotoBattle('duel', stats.variantId);
       },
       onMenu: () => {
         this.panel.destroy();
@@ -40,7 +40,7 @@ export class ResultScene implements Scene {
       this.panel.destroy();
       this.game.battle?.destroy();
       this.game.battle = undefined;
-      this.game.gotoBattle();
+      this.game.gotoBattle('duel', this.stats.variantId);
       return true;
     }
     return false;

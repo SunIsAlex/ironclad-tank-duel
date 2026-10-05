@@ -6,7 +6,8 @@ import type { ProjectileSystem } from '../systems/ProjectileSystem';
 import type { Tank, Particle, TreasureChest, TreasureReward } from '../types';
 import { BackgroundRenderer } from './BackgroundRenderer';
 import { TerrainRenderer } from './TerrainRenderer';
-import { TANK_CONFIG } from '../config/gameConfig';
+import { TANK_CONFIG, WORLD_CONFIG } from '../config/gameConfig';
+import { BATTLE_THEMES, type BattleTheme } from '../config/battleThemes';
 import { angleToVector, degToRad } from '../utils/math';
 import { COLORS, PLAYER_COLORS } from '../core/Constants';
 import { weaponRegistry } from '../weapons/WeaponRegistry';
@@ -17,17 +18,31 @@ const TREASURE_REWARD_LABELS: Record<TreasureReward, { text: string; color: stri
   split_shot: { text: 'SPLIT', color: '#dc78ff' },
 };
 
+export interface SceneOverlay {
+  /** 当前熔岩面（世界 Y），null 表示本模式没有熔岩 */
+  lavaLevel?: number | null;
+  /** 下一回合熔岩面预告 */
+  nextLavaLevel?: number | null;
+  /** 回合提示横幅的强调色 */
+  hintAccent?: string;
+}
+
 export class Renderer {
   background: BackgroundRenderer;
   terrainRenderer: TerrainRenderer;
+  private theme: BattleTheme;
+  private vignette: { w: number; h: number; gradient: CanvasGradient } | null = null;
+  private hintText = '';
+  private hintStart = 0;
 
-  constructor(seed: string) {
-    this.background = new BackgroundRenderer(seed);
+  constructor(seed: string, theme: BattleTheme = BATTLE_THEMES.nebula) {
+    this.theme = theme;
+    this.background = new BackgroundRenderer(seed, theme);
     this.terrainRenderer = new TerrainRenderer();
   }
 
   setBackgroundSeed(seed: string): void {
-    this.background = new BackgroundRenderer(seed);
+    this.background = new BackgroundRenderer(seed, this.theme);
   }
 
   renderScene(
@@ -44,7 +59,8 @@ export class Renderer {
     turnHint: { text: string; life: number } | null,
     alpha: number,
     dpr: number,
-    aimPoint: { x: number; y: number } | null = null
+    aimPoint: { x: number; y: number } | null = null,
+    overlay: SceneOverlay = {}
   ): void {
     void alpha;
     // 背景需要不受相机缩放影响太多，仍画在世界坐标里
@@ -63,6 +79,11 @@ export class Renderer {
 
     const wormholes = projectiles.getWormholes();
     if (wormholes) this.renderWormholes(ctx, wormholes);
+
+    // 熔岩画在坦克之下，浸没的坦克仍清晰可见
+    if (overlay.lavaLevel !== null && overlay.lavaLevel !== undefined) {
+      this.renderLava(ctx, overlay.lavaLevel, overlay.nextLavaLevel ?? null, terrain.worldWidth, terrain.worldHeight, reducedMotion);
+    }
 
     // 坦克
     for (const tank of tanks) {
@@ -101,10 +122,112 @@ export class Renderer {
 
     ctx.restore();
 
+    this.renderVignette(ctx, camera.viewportWidth, camera.viewportHeight, dpr);
+
     // 回合提示（屏幕坐标层）
     if (turnHint && turnHint.life > 0) {
-      this.renderTurnHint(ctx, turnHint.text, turnHint.life, camera.viewportWidth, camera.viewportHeight);
+      if (turnHint.text !== this.hintText) {
+        this.hintText = turnHint.text;
+        this.hintStart = performance.now();
+      }
+      this.renderTurnHint(
+        ctx, turnHint.text, turnHint.life, camera.viewportWidth, camera.viewportHeight,
+        overlay.hintAccent ?? COLORS.Accent, reducedMotion
+      );
+    } else {
+      this.hintText = '';
     }
+  }
+
+  private renderVignette(ctx: CanvasRenderingContext2D, vw: number, vh: number, dpr: number): void {
+    if (!this.vignette || this.vignette.w !== vw || this.vignette.h !== vh) {
+      const radius = Math.hypot(vw, vh) / 2;
+      const gradient = ctx.createRadialGradient(vw / 2, vh / 2, radius * 0.45, vw / 2, vh / 2, radius);
+      gradient.addColorStop(0, `rgba(${this.theme.vignette}, 0)`);
+      gradient.addColorStop(1, `rgba(${this.theme.vignette}, 0.55)`);
+      this.vignette = { w: vw, h: vh, gradient };
+    }
+    ctx.save();
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = this.vignette.gradient;
+    ctx.fillRect(0, 0, vw, vh);
+    ctx.restore();
+  }
+
+  private renderLava(
+    ctx: CanvasRenderingContext2D,
+    level: number,
+    nextLevel: number | null,
+    worldWidth: number,
+    worldHeight: number,
+    reducedMotion: boolean
+  ): void {
+    const t = reducedMotion ? 0 : performance.now() / 1000;
+    const surface = (x: number): number =>
+      level + Math.sin(x * 0.018 + t * 1.6) * 3.2 + Math.sin(x * 0.051 - t * 2.4) * 1.6;
+    ctx.save();
+    // 下一回合预告线
+    if (nextLevel !== null && nextLevel < level - 1) {
+      ctx.strokeStyle = 'rgba(255, 140, 60, 0.45)';
+      ctx.setLineDash([10, 8]);
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(0, nextLevel);
+      ctx.lineTo(worldWidth, nextLevel);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = 'rgba(255, 170, 90, 0.8)';
+      ctx.font = '700 20px system-ui, sans-serif';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'bottom';
+      for (let x = 60; x < worldWidth; x += 600) ctx.fillText('▲ 下回合熔岩线', x, nextLevel - 4);
+    }
+    // 熔岩上方热浪光
+    const heat = ctx.createLinearGradient(0, level - 90, 0, level);
+    heat.addColorStop(0, 'rgba(255, 90, 20, 0)');
+    heat.addColorStop(1, 'rgba(255, 110, 30, 0.28)');
+    ctx.fillStyle = heat;
+    ctx.fillRect(0, level - 90, worldWidth, 90);
+    // 熔岩本体
+    const body = ctx.createLinearGradient(0, level - 4, 0, Math.min(worldHeight, level + 220));
+    body.addColorStop(0, 'rgba(255, 214, 92, 0.96)');
+    body.addColorStop(0.08, 'rgba(255, 120, 30, 0.94)');
+    body.addColorStop(0.4, 'rgba(196, 40, 12, 0.93)');
+    body.addColorStop(1, 'rgba(70, 8, 4, 0.96)');
+    ctx.fillStyle = body;
+    ctx.beginPath();
+    ctx.moveTo(0, worldHeight);
+    for (let x = 0; x <= worldWidth; x += 12) ctx.lineTo(x, surface(x));
+    ctx.lineTo(worldWidth, worldHeight);
+    ctx.closePath();
+    ctx.fill();
+    // 发光表层
+    ctx.shadowColor = '#ff8a1f';
+    ctx.shadowBlur = 14;
+    ctx.strokeStyle = 'rgba(255, 236, 160, 0.9)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    for (let x = 0; x <= worldWidth; x += 12) {
+      if (x === 0) ctx.moveTo(x, surface(x));
+      else ctx.lineTo(x, surface(x));
+    }
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+    // 冒泡：基于时间的伪随机气泡，无需粒子对象
+    if (!reducedMotion) {
+      for (let i = 0; i < 26; i++) {
+        const cycle = (t * 0.6 + i * 0.37) % 1;
+        const bx = ((i * 977) % worldWidth) + Math.sin(i * 3.1 + t) * 10;
+        const by = surface(bx) + 6 - cycle * 4;
+        ctx.globalAlpha = (1 - cycle) * 0.8;
+        ctx.fillStyle = '#ffe28a';
+        ctx.beginPath();
+        ctx.arc(bx, by, 1.5 + cycle * 3.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+    }
+    ctx.restore();
   }
 
   private renderAimGuide(
@@ -208,18 +331,26 @@ export class Renderer {
 
   private renderTank(ctx: CanvasRenderingContext2D, tank: Tank, turn: TurnManager): void {
     if (!tank.isAlive) {
-      // 残骸
-      ctx.save();
-      ctx.translate(tank.x, tank.y);
-      ctx.fillStyle = 'rgba(80, 80, 80, 0.6)';
-      ctx.fillRect(-18, -8, 36, 14);
-      ctx.fillStyle = 'rgba(40, 40, 40, 0.7)';
-      ctx.fillRect(-12, -4, 24, 6);
-      ctx.restore();
+      this.renderWreck(ctx, tank);
       return;
     }
     const isActive = turn.currentPlayer === tank.playerIndex && turn.phase === 'PLAYER_CONTROL';
     const color = PLAYER_COLORS[tank.playerIndex];
+    if (isActive) {
+      // 当前操作坦克脚下的脉冲光环
+      const pulse = (performance.now() / 900) % 1;
+      ctx.save();
+      ctx.translate(tank.x, tank.y + 3);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1.5;
+      for (const phase of [pulse, (pulse + 0.5) % 1]) {
+        ctx.globalAlpha = (1 - phase) * 0.55;
+        ctx.beginPath();
+        ctx.ellipse(0, 0, 18 + phase * 22, 4 + phase * 5, 0, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
     ctx.save();
     ctx.translate(tank.x, tank.y);
     ctx.rotate(tank.bodyAngle);
@@ -323,19 +454,70 @@ export class Renderer {
     if (tank.hitFlash > 0) tank.hitFlash -= 0.016;
   }
 
+  private renderWreck(ctx: CanvasRenderingContext2D, tank: Tank): void {
+    ctx.save();
+    ctx.translate(tank.x, tank.y);
+    ctx.rotate(tank.bodyAngle + 0.08);
+    ctx.fillStyle = '#1a1d20';
+    ctx.strokeStyle = 'rgba(255, 120, 60, 0.35)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(-18, 0);
+    ctx.lineTo(-16, -9);
+    ctx.lineTo(-4, -12);
+    ctx.lineTo(4, -8);
+    ctx.lineTo(14, -10);
+    ctx.lineTo(18, 0);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    // 折断的炮管
+    ctx.fillStyle = '#2a2f33';
+    ctx.save();
+    ctx.translate(2, -11);
+    ctx.rotate(tank.playerIndex === 0 ? 0.5 : Math.PI - 0.5);
+    ctx.fillRect(0, -2, 13, 4);
+    ctx.restore();
+    // 余烬
+    const t = performance.now() / 1000;
+    ctx.fillStyle = `rgba(255, 120, 40, ${0.45 + Math.sin(t * 5) * 0.25})`;
+    ctx.beginPath();
+    ctx.arc(-3, -7, 2.2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    // 袅袅黑烟
+    ctx.save();
+    for (let i = 0; i < 5; i++) {
+      const cycle = (t * 0.35 + i / 5) % 1;
+      ctx.globalAlpha = (1 - cycle) * 0.35;
+      ctx.fillStyle = '#2b2b2e';
+      ctx.beginPath();
+      ctx.arc(tank.x - 2 + Math.sin(t + i) * 6 + cycle * 10, tank.y - 12 - cycle * 60, 4 + cycle * 10, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
   private renderHealthBar(ctx: CanvasRenderingContext2D, x: number, y: number, ratio: number, color: string): void {
-    const w = 36;
+    const w = 40;
     const h = 5;
     ctx.save();
     ctx.fillStyle = 'rgba(2,9,16,0.85)';
-    ctx.fillRect(x - w / 2 - 1, y - 1, w + 2, h + 2);
-    ctx.fillStyle = '#0b1b2a';
-    ctx.fillRect(x - w / 2, y, w, h);
+    ctx.beginPath();
+    ctx.roundRect(x - w / 2 - 1.5, y - 1.5, w + 3, h + 3, 3);
+    ctx.fill();
     const r = Math.max(0, Math.min(1, ratio));
-    ctx.shadowColor = color;
+    const fill = r > 0.5 ? color : r > 0.25 ? '#ffd166' : COLORS.Warning;
+    ctx.shadowColor = fill;
     ctx.shadowBlur = 5;
-    ctx.fillStyle = color;
-    ctx.fillRect(x - w / 2, y, w * r, h);
+    ctx.fillStyle = fill;
+    ctx.beginPath();
+    ctx.roundRect(x - w / 2, y, Math.max(0.01, w * r), h, 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    // 分段刻度
+    ctx.fillStyle = 'rgba(0,0,0,0.45)';
+    for (let i = 1; i < 4; i++) ctx.fillRect(x - w / 2 + (w * i) / 4, y, 1, h);
     ctx.restore();
   }
 
@@ -438,14 +620,23 @@ export class Renderer {
   }
 
   private renderDamageNumber(ctx: CanvasRenderingContext2D, x: number, y: number, value: number, ratio: number): void {
+    // 出现瞬间放大回弹；高伤害使用更大字号与炽热配色。
+    const age = 1 - ratio;
+    const pop = 1 + 0.7 * Math.max(0, 1 - age / 0.16);
+    const big = value >= 30;
+    const size = (big ? 22 : 16) * pop;
     ctx.save();
-    ctx.globalAlpha = ratio;
-    ctx.font = 'bold 16px monospace';
+    ctx.globalAlpha = Math.min(1, ratio * 1.6);
+    ctx.font = `900 ${size.toFixed(1)}px system-ui, sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillStyle = '#000';
-    ctx.fillText(`-${value}`, x + 1, y + 1);
-    ctx.fillStyle = COLORS.Warning;
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = 'rgba(10, 4, 8, 0.85)';
+    ctx.strokeText(`-${value}`, x, y);
+    ctx.fillStyle = big ? '#ffd166' : '#ff6b8a';
+    ctx.shadowColor = big ? '#ff8a1f' : COLORS.Warning;
+    ctx.shadowBlur = big ? 12 : 6;
     ctx.fillText(`-${value}`, x, y);
     ctx.restore();
   }
@@ -463,34 +654,82 @@ export class Renderer {
     let y = tank.y - 6 + dir.y * 30;
     let vx = dir.x * speed;
     let vy = dir.y * speed;
-    const g = 520 * weapon.gravityMultiplier;
-    const w = wind.value * 55 * weapon.windMultiplier;
+    const g = WORLD_CONFIG.gravity * weapon.gravityMultiplier;
+    const w = wind.value * WORLD_CONFIG.windScale * weapon.windMultiplier;
     const dt = 0.03;
-    ctx.fillStyle = 'rgba(255, 220, 120, 0.5)';
-    for (let i = 0; i < 28; i++) {
+    const steps = 28;
+    ctx.save();
+    ctx.fillStyle = weapon.color;
+    ctx.shadowColor = weapon.color;
+    ctx.shadowBlur = 6;
+    for (let i = 0; i < steps; i++) {
       vx += w * dt;
       vy += g * dt;
       x += vx * dt;
       y += vy * dt;
       if (terrain.isSolid(x, y)) break;
       if (x < 0 || x > terrain.worldWidth || y > terrain.worldHeight) break;
+      // 越远越淡越小，强调近端弹道方向
+      const fade = 1 - i / steps;
+      ctx.globalAlpha = 0.2 + fade * 0.6;
       ctx.beginPath();
-      ctx.arc(x, y, 2.5, 0, Math.PI * 2);
+      ctx.arc(x, y, 1.2 + fade * 1.8, 0, Math.PI * 2);
       ctx.fill();
     }
+    ctx.restore();
   }
 
-  private renderTurnHint(ctx: CanvasRenderingContext2D, text: string, life: number, vw: number, vh: number): void {
+  private renderTurnHint(
+    ctx: CanvasRenderingContext2D,
+    text: string,
+    life: number,
+    vw: number,
+    vh: number,
+    accent: string,
+    reducedMotion: boolean
+  ): void {
+    const elapsed = (performance.now() - this.hintStart) / 1000;
+    const enter = reducedMotion ? 1 : Math.min(1, elapsed / 0.22);
+    const ease = 1 - Math.pow(1 - enter, 3);
+    const alpha = Math.min(1, life * 2.5) * ease;
+    const fontSize = Math.max(16, Math.min(30, vw / 28));
     ctx.save();
-    const alpha = Math.min(1, life);
+    ctx.font = `800 ${fontSize}px system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif`;
+    const textW = Math.min(vw - 40, ctx.measureText(text).width + 90);
+    const bandH = fontSize + 30;
+    const cx = vw / 2 + (1 - ease) * -60;
+    const cy = vh * 0.36;
+    const skew = 14;
     ctx.globalAlpha = alpha;
-    ctx.fillStyle = 'rgba(0,0,0,0.5)';
-    ctx.fillRect(0, vh / 2 - 50, vw, 100);
-    ctx.fillStyle = COLORS.Accent;
-    ctx.font = 'bold 36px monospace';
+    // 斜切横幅底板
+    const bg = ctx.createLinearGradient(cx - textW / 2, 0, cx + textW / 2, 0);
+    bg.addColorStop(0, 'rgba(4, 10, 20, 0)');
+    bg.addColorStop(0.12, 'rgba(4, 10, 20, 0.86)');
+    bg.addColorStop(0.88, 'rgba(4, 10, 20, 0.86)');
+    bg.addColorStop(1, 'rgba(4, 10, 20, 0)');
+    ctx.fillStyle = bg;
+    ctx.beginPath();
+    ctx.moveTo(cx - textW / 2 + skew, cy - bandH / 2);
+    ctx.lineTo(cx + textW / 2 + skew, cy - bandH / 2);
+    ctx.lineTo(cx + textW / 2 - skew, cy + bandH / 2);
+    ctx.lineTo(cx - textW / 2 - skew, cy + bandH / 2);
+    ctx.closePath();
+    ctx.fill();
+    // 上下强调线
+    const line = ctx.createLinearGradient(cx - textW / 2, 0, cx + textW / 2, 0);
+    line.addColorStop(0, 'rgba(255,255,255,0)');
+    line.addColorStop(0.5, accent);
+    line.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = line;
+    ctx.fillRect(cx - textW / 2 + skew, cy - bandH / 2, textW, 2);
+    ctx.fillRect(cx - textW / 2 - skew, cy + bandH / 2 - 2, textW, 2);
+    // 文本
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(text, vw / 2, vh / 2);
+    ctx.shadowColor = accent;
+    ctx.shadowBlur = 16;
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(text, cx, cy + 1, vw - 60);
     ctx.restore();
   }
 }

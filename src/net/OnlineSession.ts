@@ -5,7 +5,8 @@ export interface OnlineStartData {
   player1Name: string;
   player2Name: string;
   playerIndex: number;
-  settings: Pick<GameSettings, 'mapPreset' | 'turnTime' | 'initialHealth' | 'windStrength' | 'movementFuel'>;
+  settings: Pick<GameSettings, 'mapPreset' | 'turnTime' | 'initialHealth' | 'windStrength' | 'movementFuel'> &
+    Partial<Pick<GameSettings, 'gameVariant'>>;
 }
 
 /**

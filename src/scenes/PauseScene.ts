@@ -30,8 +30,9 @@ export class PauseScene implements Scene {
     this.overlay.querySelector<HTMLButtonElement>('#pp-resume')!.addEventListener('click', () => this.resume());
     this.overlay.querySelector<HTMLButtonElement>('#pp-restart')!.addEventListener('click', () => {
       const mode = this.game.battle?.mode ?? 'duel';
+      const variant = this.game.battle?.variant.id;
       this.destroy();
-      this.game.gotoBattle(mode);
+      this.game.gotoBattle(mode, variant);
     });
     this.overlay.querySelector<HTMLButtonElement>('#pp-menu')!.addEventListener('click', () => {
       this.destroy();

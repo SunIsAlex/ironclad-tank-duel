@@ -29,8 +29,11 @@ function clampInt(value, min, max, fallback) {
   return Number.isFinite(number) ? Math.max(min, Math.min(max, number)) : fallback;
 }
 
+const GAME_VARIANTS = ['classic', 'blitz', 'arsenal', 'lava', 'moon', 'mayhem'];
+
 function cleanSettings(settings = {}) {
   return {
+    gameVariant: GAME_VARIANTS.includes(settings.gameVariant) ? settings.gameVariant : 'classic',
     mapPreset: String(settings.mapPreset || 'generated').slice(0, 24),
     turnTime: clampInt(settings.turnTime, 0, 60, 0),
     initialHealth: clampInt(settings.initialHealth, 50, 300, 100),

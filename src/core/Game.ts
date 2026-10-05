@@ -107,13 +107,13 @@ export class Game {
     this.sceneMgr.change(menu);
   }
 
-  gotoBattle(mode: GameMode = 'duel'): void {
+  gotoBattle(mode: GameMode = 'duel', variantId?: string): void {
     audioSystem.init();
     audioSystem.resume();
     if (this.battle) {
       this.battle.destroy();
     }
-    const battle = new BattleScene(this, mode);
+    const battle = new BattleScene(this, mode, variantId);
     this.battle = battle;
     this.sceneMgr.change(battle);
   }

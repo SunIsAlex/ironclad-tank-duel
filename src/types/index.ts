@@ -165,6 +165,8 @@ export type WeaponBehavior =
   | 'shower'
   | 'seismic';
 
+export type GameVariantId = 'classic' | 'blitz' | 'arsenal' | 'lava' | 'moon' | 'mayhem';
+
 export interface GameSettings {
   player1Name: string;
   player2Name: string;
@@ -181,6 +183,7 @@ export interface GameSettings {
   sfxVolume: number;
   showTrajectory: boolean;
   reducedMotion: boolean;
+  gameVariant: GameVariantId;
 }
 
 export type GameMode = 'duel' | 'training' | 'online';
@@ -203,6 +206,7 @@ export interface WindState {
 }
 
 export interface MissionStats {
+  variantId: GameVariantId;
   totalRounds: number;
   gamesPlayed: number;
   matchWins: [number, number];

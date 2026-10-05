@@ -4,6 +4,8 @@ import { SettingsPanel } from '../ui/SettingsPanel';
 import type { GameMode, GameSettings } from '../types';
 import { OnlineSession, type OnlineStartData } from '../net/OnlineSession';
 import { generateRandomSeed } from '../utils/random';
+import { getGameVariant } from '../config/gameVariants';
+import { audioSystem } from '../systems/AudioSystem';
 
 interface HelpData {
   keys: Array<{ k: string; d: string }>;
@@ -42,6 +44,11 @@ export class MainMenuScene implements Scene {
       onSettings: () => this.settings.show(),
       onHelp: () => this.showOverlay(this.helpOverlay),
       onAbout: () => this.showOverlay(this.aboutOverlay),
+      onVariantChange: (id) => {
+        this.game.settings.gameVariant = id;
+        this.game.saveSettings();
+        audioSystem.click();
+      },
     });
     this.settings = new SettingsPanel(parent, game.settings, (s) => this.onSettingsChange(s));
     this.helpOverlay = this.createOverlay(this.renderHelp());
@@ -57,12 +64,13 @@ export class MainMenuScene implements Scene {
   }
 
   private onSettingsChange(s: GameSettings): void {
-    this.game.settings = s;
+    // 设置面板持有的是打开时的快照；玩法模式以主菜单的当前选择为准。
+    this.game.settings = { ...s, gameVariant: this.game.settings.gameVariant };
     this.game.saveSettings();
     this.menu.updatePlayers(s);
   }
 
-  private startBattle(mode: GameMode): void {
+  private startBattle(mode: GameMode, variantId?: string): void {
     // 销毁 UI
     this.menu.hide();
     this.menu.destroy();
@@ -71,7 +79,7 @@ export class MainMenuScene implements Scene {
     this.aboutOverlay.remove();
     this.onlineLobby.remove();
     this.landscapeHint.remove();
-    this.game.gotoBattle(mode);
+    this.game.gotoBattle(mode, variantId);
   }
 
   private showOnlineLobby(): void {
@@ -86,6 +94,9 @@ export class MainMenuScene implements Scene {
     const create = this.onlineLobby.querySelector<HTMLButtonElement>('#online-create')!;
     const join = this.onlineLobby.querySelector<HTMLButtonElement>('#online-join')!;
     room.textContent = '';
+    const variant = getGameVariant(this.game.settings.gameVariant);
+    this.onlineLobby.querySelector<HTMLElement>('#online-variant')!.innerHTML =
+      `创建房间将使用玩法 <b style="color:${variant.accent}">${variant.displayName}</b>（加入方跟随房主设置）`;
     status.textContent = '选择创建房间或输入好友的配对码。';
     start.hidden = true;
     create.disabled = false;
@@ -109,7 +120,8 @@ export class MainMenuScene implements Scene {
       this.game.settings.mapSeed = data.seed;
       Object.assign(this.game.settings, data.settings);
       this.game.saveSettings();
-      this.startBattle('online');
+      // 旧版中继会丢弃玩法字段；此时双方都按经典模式开局，保持一致。
+      this.startBattle('online', data.settings.gameVariant ?? 'classic');
     });
     session.on('error', (message) => {
       status.textContent = String(message.message ?? '联机服务暂不可用。');
@@ -145,9 +157,9 @@ export class MainMenuScene implements Scene {
     };
     start.onclick = () => {
       if (session.roomCode) {
-        const { mapPreset, turnTime, initialHealth, windStrength, movementFuel } = this.game.settings;
+        const { mapPreset, turnTime, initialHealth, windStrength, movementFuel, gameVariant } = this.game.settings;
         session.start(generateRandomSeed(), this.game.settings.player1Name, this.game.settings.player2Name, {
-          mapPreset, turnTime, initialHealth, windStrength, movementFuel,
+          mapPreset, turnTime, initialHealth, windStrength, movementFuel, gameVariant,
         });
       }
     };
@@ -161,6 +173,7 @@ export class MainMenuScene implements Scene {
       <div class="modal online-panel" role="dialog" aria-label="配对码联机">
         <h2>配对码联机</h2>
         <p>创建房间后把配对码发给好友；双方进入同一场回合制对战。</p>
+        <p id="online-variant" class="online-variant"></p>
         <div id="online-room" class="online-room-code"></div>
         <label class="online-code-label" for="online-code">好友配对码</label>
         <input id="online-code" maxlength="8" autocomplete="off" autocapitalize="characters" placeholder="输入配对码">
